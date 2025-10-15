@@ -1,4 +1,3 @@
-// src/app/scan/[plate]/page.tsx
 "use client";
 export const dynamic = "force-dynamic";
 
@@ -30,16 +29,12 @@ export default function ScanCallPage() {
   }
 
   async function onHangup() {
-    try { await stop?.(); } finally {
-      setStop(null);
-      setStatus("idle");
-    }
+    try { await stop?.(); } finally { setStop(null); setStatus("idle"); }
   }
 
   return (
     <div className="space-y-4 p-6">
       <h1 className="text-2xl font-semibold">Call Owner — {plate.toUpperCase()}</h1>
-
       {stop ? (
         <button className="btn" onClick={onHangup}>Hang Up</button>
       ) : (
@@ -47,7 +42,6 @@ export default function ScanCallPage() {
           {status === "connecting" ? "Connecting..." : "Start Call"}
         </button>
       )}
-
       <div className="text-sm text-white/60">Status: {status}</div>
     </div>
   );
