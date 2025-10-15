@@ -2,10 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
-import type { RealtimePostgresInsertPayload, RealtimePostgresUpdatePayload } from "@supabase/supabase-js";
+import type {
+  RealtimePostgresInsertPayload,
+  RealtimePostgresUpdatePayload,
+} from "@supabase/supabase-js";
 import { startCall } from "@/lib/agora";
 
-/** DB row we care about */
 type CallRow = {
   id: string;
   plate: string;
@@ -20,47 +22,46 @@ type CallRow = {
 
 export default function OwnerCallPage() {
   const [incoming, setIncoming] = useState<CallRow | null>(null);
-  const [activeStop, setActiveStop] = useState<null | (() => Promise<void>)>(null);
-  const [status, setStatus] = useState<"waiting" | "ringing" | "connecting" | "connected">("waiting");
+  const [activeStop, setActiveStop] =
+    useState<null | (() => Promise<void>)>(null);
+  const [status, setStatus] = useState<
+    "waiting" | "ringing" | "connecting" | "connected"
+  >("waiting");
+
+  // debug info
+  const [userId, setUserId] = useState<string>("");
+  const [rtStatus, setRtStatus] = useState<string>("INIT");
+  const [lastPoll, setLastPoll] = useState<string>("");
 
   const ringRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
-    let stopCleanup: (() => void) | undefined;
+    let stopRealtime: (() => void) | undefined;
+    let pollTimer: ReturnType<typeof setInterval> | undefined;
 
     (async () => {
       const { data: userRes } = await supabase.auth.getUser();
       const user = userRes.user;
       if (!user) {
-        console.warn("[owner-call] no logged-in user; not listening");
+        setRtStatus("NO_USER");
         return;
       }
+      setUserId(user.id);
 
-      console.log("[owner-call] listening for calls for owner_id:", user.id);
-
+      // ---------- Realtime subscribe ----------
       const ch = supabase
         .channel("call_sessions_rt")
-        // INSERTs for my owner_id
         .on(
           "postgres_changes",
-          { event: "INSERT", schema: "public", table: "call_sessions", filter: `owner_id=eq.${user.id}` },
+          {
+            event: "INSERT",
+            schema: "public",
+            table: "call_sessions",
+            filter: `owner_id=eq.${user.id}`,
+          },
           (payload: RealtimePostgresInsertPayload<CallRow>) => {
-            console.log("[owner-call] INSERT payload:", payload);
-            const newCall = payload.new;
-            if (newCall?.status === "ringing") {
-              setIncoming(newCall);
-              setStatus("ringing");
-              playRingtone();
-            }
-          }
-        )
-        // UPDATEs to ringing (in case your RPC inserts non-ringing first, then updates)
-        .on(
-          "postgres_changes",
-          { event: "UPDATE", schema: "public", table: "call_sessions", filter: `owner_id=eq.${user.id}` },
-          (payload: RealtimePostgresUpdatePayload<CallRow>) => {
-            console.log("[owner-call] UPDATE payload:", payload);
             const row = payload.new;
+            console.log("[RT INSERT]", row);
             if (row?.status === "ringing") {
               setIncoming(row);
               setStatus("ringing");
@@ -68,31 +69,69 @@ export default function OwnerCallPage() {
             }
           }
         )
-        .subscribe((status) => {
-          console.log("[owner-call] channel status:", status);
-          if (status === "CHANNEL_ERROR") {
-            console.error("[owner-call] realtime channel error");
+        .on(
+          "postgres_changes",
+          {
+            event: "UPDATE",
+            schema: "public",
+            table: "call_sessions",
+            filter: `owner_id=eq.${user.id}`,
+          },
+          (payload: RealtimePostgresUpdatePayload<CallRow>) => {
+            const row = payload.new;
+            console.log("[RT UPDATE]", row);
+            if (row?.status === "ringing") {
+              setIncoming(row);
+              setStatus("ringing");
+              playRingtone();
+            }
           }
+        )
+        .subscribe((s) => {
+          setRtStatus(s);
+          console.log("[RT STATUS]", s);
         });
 
-      stopCleanup = () => {
-        supabase.removeChannel(ch);
-      };
+      stopRealtime = () => supabase.removeChannel(ch);
+
+      // ---------- Polling fallback (every 3s) ----------
+      pollTimer = setInterval(async () => {
+        const now = new Date().toISOString();
+        setLastPoll(new Date().toLocaleTimeString());
+
+        const { data, error } = await supabase
+          .from("call_sessions")
+          .select("*")
+          .eq("owner_id", user.id)
+          .eq("status", "ringing")
+          .order("created_at", { ascending: false })
+          .limit(1);
+
+        if (error) {
+          console.warn("[POLL ERROR]", error.message);
+          return;
+        }
+        const row = data?.[0] as CallRow | undefined;
+        if (row && (!incoming || incoming.id !== row.id)) {
+          console.log("[POLL HIT]", row);
+          setIncoming(row);
+          setStatus("ringing");
+          playRingtone();
+        }
+      }, 3000);
     })();
 
     return () => {
-      if (stopCleanup) stopCleanup();
+      if (stopRealtime) stopRealtime();
+      if (pollTimer) clearInterval(pollTimer);
     };
-  }, []);
+  }, [incoming]);
 
   function playRingtone() {
     stopRingtone();
     const a = new Audio("/ringtone.mp3");
     a.loop = true;
-    void a.play().catch((e) => {
-      // mobile may require user gesture; at least we see a log.
-      console.warn("[owner-call] autoplay blocked:", e);
-    });
+    void a.play().catch((e) => console.warn("autoplay blocked", e));
     ringRef.current = a;
   }
 
@@ -113,7 +152,7 @@ export default function OwnerCallPage() {
       setActiveStop(() => stop);
       setStatus("connected");
     } catch (e) {
-      console.error("[owner-call] acceptCall failed:", e);
+      console.error("acceptCall error", e);
       setStatus("waiting");
     }
   }
@@ -122,22 +161,27 @@ export default function OwnerCallPage() {
     stopRingtone();
     setIncoming(null);
     setStatus("waiting");
-    // (optional) you could update call_sessions.status='declined' here
+    // (optional) update status='declined'
   }
 
   async function endCall() {
-    if (activeStop) {
-      await activeStop();
-    }
+    if (activeStop) await activeStop();
     setActiveStop(null);
     setIncoming(null);
     setStatus("waiting");
   }
 
   return (
-    <div className="space-y-3 text-center">
+    <div className="space-y-4 text-center">
       <h1 className="text-xl font-semibold">📞 Owner Call Dashboard</h1>
       <div className="text-sm opacity-70">{status}</div>
+
+      {/* debug box */}
+      <div className="mx-auto w-fit text-xs opacity-70 border rounded px-3 py-2">
+        <div>user: {userId || "—"}</div>
+        <div>rt: {rtStatus}</div>
+        <div>last poll: {lastPoll || "—"}</div>
+      </div>
 
       {incoming && status === "ringing" && (
         <div className="p-4 border rounded bg-neutral-100 dark:bg-neutral-800">
@@ -145,10 +189,16 @@ export default function OwnerCallPage() {
             Incoming call for: <b>{incoming.plate}</b>
           </p>
           <div className="flex justify-center gap-3">
-            <button onClick={acceptCall} className="btn bg-green-600 text-white px-4 py-2 rounded">
+            <button
+              onClick={acceptCall}
+              className="btn bg-green-600 text-white px-4 py-2 rounded"
+            >
               Accept
             </button>
-            <button onClick={declineCall} className="btn bg-red-600 text-white px-4 py-2 rounded">
+            <button
+              onClick={declineCall}
+              className="btn bg-red-600 text-white px-4 py-2 rounded"
+            >
               Decline
             </button>
           </div>
@@ -156,7 +206,10 @@ export default function OwnerCallPage() {
       )}
 
       {status === "connected" && (
-        <button onClick={endCall} className="btn bg-red-600 text-white px-4 py-2 rounded">
+        <button
+          onClick={endCall}
+          className="btn bg-red-600 text-white px-4 py-2 rounded"
+        >
           End Call
         </button>
       )}
