@@ -1,3 +1,4 @@
+// src/app/scan/[plate]/page.tsx
 "use client";
 export const dynamic = "force-dynamic";
 
@@ -5,9 +6,9 @@ import { useParams } from "next/navigation";
 import { useState } from "react";
 import { startCall } from "@/lib/agora";
 
-function humanError(err: unknown) {
-  if (err instanceof Error) return err.message;
-  try { return JSON.stringify(err); } catch { return String(err); }
+function msg(e: unknown) {
+  if (e instanceof Error) return e.message;
+  try { return JSON.stringify(e); } catch { return String(e); }
 }
 
 export default function ScanCallPage() {
@@ -23,18 +24,22 @@ export default function ScanCallPage() {
       setStop(() => end);
       setStatus("connected");
     } catch (e: unknown) {
-      alert(humanError(e) || "Call failed");
+      alert(msg(e) || "Call failed");
       setStatus("idle");
     }
   }
 
   async function onHangup() {
-    try { await stop?.(); } finally { setStop(null); setStatus("idle"); }
+    try { await stop?.(); } finally {
+      setStop(null);
+      setStatus("idle");
+    }
   }
 
   return (
     <div className="space-y-4 p-6">
       <h1 className="text-2xl font-semibold">Call Owner — {plate.toUpperCase()}</h1>
+
       {stop ? (
         <button className="btn" onClick={onHangup}>Hang Up</button>
       ) : (
@@ -42,7 +47,11 @@ export default function ScanCallPage() {
           {status === "connecting" ? "Connecting..." : "Start Call"}
         </button>
       )}
+
       <div className="text-sm text-white/60">Status: {status}</div>
+      <p className="text-xs text-white/40">
+        Allow microphone permission when asked.
+      </p>
     </div>
   );
 }
