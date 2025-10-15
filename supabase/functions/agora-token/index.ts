@@ -35,13 +35,12 @@ Deno.serve(async (req) => {
 
   try {
     const body = await req.json().catch(() => ({}));
-    const channel = String(body?.channel ?? "").trim();
+    const channel = String(body?.channel ?? "").trim().toUpperCase();
     if (!channel) return new Response("channel required", { status: 400, headers: corsHeaders });
 
     const ttlSeconds = Number.isFinite(Number(body?.ttlSeconds)) ? Number(body.ttlSeconds) : 3600;
     const expireAt = Math.floor(Date.now() / 1000) + ttlSeconds;
 
-    // Agora requires numeric uid. 0 => let Agora assign.
     const uidNum = Number(body?.uid);
     const uid = Number.isFinite(uidNum) ? uidNum : 0;
 

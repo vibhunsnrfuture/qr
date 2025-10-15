@@ -1,4 +1,6 @@
+// src/app/scan/[plate]/page.tsx
 "use client";
+export const dynamic = "force-dynamic";
 
 import { useParams } from "next/navigation";
 import { useState } from "react";
@@ -6,25 +8,19 @@ import { startCall } from "@/lib/agora";
 
 function humanError(err: unknown) {
   if (err instanceof Error) return err.message;
-  try {
-    return JSON.stringify(err);
-  } catch {
-    return String(err);
-  }
+  try { return JSON.stringify(err); } catch { return String(err); }
 }
 
 export default function ScanCallPage() {
   const params = useParams<{ plate: string }>();
   const plate = String(params?.plate ?? "");
   const [stop, setStop] = useState<null | (() => Promise<void>)>(null);
-  const [status, setStatus] = useState<"idle" | "connecting" | "connected">(
-    "idle"
-  );
+  const [status, setStatus] = useState<"idle" | "connecting" | "connected">("idle");
 
   async function onCall() {
     try {
       setStatus("connecting");
-      const end = await startCall(plate);
+      const end = await startCall(plate.toUpperCase());
       setStop(() => end);
       setStatus("connected");
     } catch (e: unknown) {
@@ -34,9 +30,7 @@ export default function ScanCallPage() {
   }
 
   async function onHangup() {
-    try {
-      await stop?.();
-    } finally {
+    try { await stop?.(); } finally {
       setStop(null);
       setStatus("idle");
     }
@@ -44,12 +38,10 @@ export default function ScanCallPage() {
 
   return (
     <div className="space-y-4 p-6">
-      <h1 className="text-2xl font-semibold">Call Owner — {plate}</h1>
+      <h1 className="text-2xl font-semibold">Call Owner — {plate.toUpperCase()}</h1>
 
       {stop ? (
-        <button className="btn" onClick={onHangup}>
-          Hang Up
-        </button>
+        <button className="btn" onClick={onHangup}>Hang Up</button>
       ) : (
         <button className="btn" onClick={onCall} disabled={status !== "idle"}>
           {status === "connecting" ? "Connecting..." : "Start Call"}
