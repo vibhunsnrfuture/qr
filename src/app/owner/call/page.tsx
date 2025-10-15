@@ -1,12 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
-import type {
-  RealtimePostgresInsertPayload,
-  RealtimePostgresUpdatePayload,
-} from "@supabase/supabase-js";
-import { startCall } from "@/lib/agora";
+import type { RealtimePostgresInsertPayload } from "@supabase/supabase-js";
+import dayjs from "dayjs";
 
 type CallRow = {
   id: string;
@@ -22,35 +19,89 @@ type CallRow = {
 
 export default function OwnerCallPage() {
   const [incoming, setIncoming] = useState<CallRow | null>(null);
-  const [activeStop, setActiveStop] =
-    useState<null | (() => Promise<void>)>(null);
   const [status, setStatus] = useState<
     "waiting" | "ringing" | "connecting" | "connected"
   >("waiting");
-
-  // debug info
+  const [rt, setRt] = useState("INIT");
   const [userId, setUserId] = useState<string>("");
-  const [rtStatus, setRtStatus] = useState<string>("INIT");
-  const [lastPoll, setLastPoll] = useState<string>("");
 
+  const currentIdRef = useRef<string | null>(null);
   const ringRef = useRef<HTMLAudioElement | null>(null);
 
+  // ---- helpers ----
+  const stopRingtone = useCallback(() => {
+    if (ringRef.current) {
+      ringRef.current.pause();
+      ringRef.current.currentTime = 0;
+      ringRef.current = null;
+    }
+  }, []);
+
+  const playRingtone = useCallback(() => {
+    stopRingtone();
+    const audio = new Audio("/ringtone.mp3");
+    audio.loop = true;
+    void audio.play().catch(() => {});
+    ringRef.current = audio;
+  }, [stopRingtone]);
+
+  async function updateStatus(id: string, next: CallRow["status"]) {
+    const { error } = await supabase
+      .from("call_sessions")
+      .update({
+        status: next,
+        accepted_at: next === "accepted" ? new Date().toISOString() : null,
+        ended_at:
+          next === "declined" || next === "ended" || next === "timeout"
+            ? new Date().toISOString()
+            : null,
+      })
+      .eq("id", id);
+    if (error) console.error("updateStatus error:", error.message);
+  }
+
+  async function acceptCall() {
+    if (!incoming) return;
+    stopRingtone();
+    setStatus("connecting");
+    await updateStatus(incoming.id, "accepted");
+
+    const { startCall } = await import("@/lib/agora");
+    await startCall(incoming.channel);
+    setStatus("connected");
+  }
+
+  async function declineCall() {
+    if (!incoming) return;
+    stopRingtone();
+    await updateStatus(incoming.id, "declined");
+    currentIdRef.current = null;
+    setIncoming(null);
+    setStatus("waiting");
+  }
+
+  async function endCall() {
+    if (!incoming) return;
+    stopRingtone();
+    await updateStatus(incoming.id, "ended");
+    currentIdRef.current = null;
+    setIncoming(null);
+    setStatus("waiting");
+  }
+
+  // ---- realtime + poll ----
   useEffect(() => {
-    let stopRealtime: (() => void) | undefined;
-    let pollTimer: ReturnType<typeof setInterval> | undefined;
+    let unsubscribed = false;
 
     (async () => {
-      const { data: userRes } = await supabase.auth.getUser();
-      const user = userRes.user;
-      if (!user) {
-        setRtStatus("NO_USER");
-        return;
-      }
+      const { data } = await supabase.auth.getUser();
+      const user = data.user;
+      if (!user) return;
       setUserId(user.id);
 
-      // ---------- Realtime subscribe ----------
-      const ch = supabase
-        .channel("call_sessions_rt")
+      // Realtime subscribe for new call rows for this owner
+      const sub = supabase
+        .channel("call_sessions_owner")
         .on(
           "postgres_changes",
           {
@@ -61,144 +112,75 @@ export default function OwnerCallPage() {
           },
           (payload: RealtimePostgresInsertPayload<CallRow>) => {
             const row = payload.new;
-            console.log("[RT INSERT]", row);
-            if (row?.status === "ringing") {
+            const recent =
+              dayjs(row.created_at).isAfter(dayjs().subtract(120, "second")) &&
+              row.status === "ringing";
+
+            if (recent && !unsubscribed) {
+              if (currentIdRef.current === row.id) return;
+              currentIdRef.current = row.id;
               setIncoming(row);
               setStatus("ringing");
               playRingtone();
             }
           }
         )
-        .on(
-          "postgres_changes",
-          {
-            event: "UPDATE",
-            schema: "public",
-            table: "call_sessions",
-            filter: `owner_id=eq.${user.id}`,
-          },
-          (payload: RealtimePostgresUpdatePayload<CallRow>) => {
-            const row = payload.new;
-            console.log("[RT UPDATE]", row);
-            if (row?.status === "ringing") {
-              setIncoming(row);
-              setStatus("ringing");
-              playRingtone();
-            }
-          }
-        )
-        .subscribe((s) => {
-          setRtStatus(s);
-          console.log("[RT STATUS]", s);
-        });
+        .subscribe((s) => setRt(s === "SUBSCRIBED" ? "SUBSCRIBED" : String(s)));
 
-      stopRealtime = () => supabase.removeChannel(ch);
-
-      // ---------- Polling fallback (every 3s) ----------
-      pollTimer = setInterval(async () => {
-        const now = new Date().toISOString();
-        setLastPoll(new Date().toLocaleTimeString());
-
-        const { data, error } = await supabase
+      // Fallback poll every 5 seconds (ensure reliability)
+      const poll = setInterval(async () => {
+        const { data: rows, error } = await supabase
           .from("call_sessions")
           .select("*")
           .eq("owner_id", user.id)
           .eq("status", "ringing")
+          .gt("created_at", dayjs().subtract(60, "second").toISOString())
           .order("created_at", { ascending: false })
           .limit(1);
+        if (error) return;
 
-        if (error) {
-          console.warn("[POLL ERROR]", error.message);
-          return;
-        }
-        const row = data?.[0] as CallRow | undefined;
-        if (row && (!incoming || incoming.id !== row.id)) {
-          console.log("[POLL HIT]", row);
+        const row = rows?.[0];
+        if (!row) return;
+
+        if (currentIdRef.current !== row.id) {
+          currentIdRef.current = row.id;
           setIncoming(row);
           setStatus("ringing");
           playRingtone();
         }
-      }, 3000);
+      }, 5000);
+
+      // Cleanup
+      return () => {
+        unsubscribed = true;
+        supabase.removeChannel(sub);
+        clearInterval(poll);
+      };
     })();
-
-    return () => {
-      if (stopRealtime) stopRealtime();
-      if (pollTimer) clearInterval(pollTimer);
-    };
-  }, [incoming]);
-
-  function playRingtone() {
-    stopRingtone();
-    const a = new Audio("/ringtone.mp3");
-    a.loop = true;
-    void a.play().catch((e) => console.warn("autoplay blocked", e));
-    ringRef.current = a;
-  }
-
-  function stopRingtone() {
-    if (ringRef.current) {
-      ringRef.current.pause();
-      ringRef.current.currentTime = 0;
-      ringRef.current = null;
-    }
-  }
-
-  async function acceptCall() {
-    if (!incoming) return;
-    stopRingtone();
-    setStatus("connecting");
-    try {
-      const stop = await startCall(incoming.channel);
-      setActiveStop(() => stop);
-      setStatus("connected");
-    } catch (e) {
-      console.error("acceptCall error", e);
-      setStatus("waiting");
-    }
-  }
-
-  function declineCall() {
-    stopRingtone();
-    setIncoming(null);
-    setStatus("waiting");
-    // (optional) update status='declined'
-  }
-
-  async function endCall() {
-    if (activeStop) await activeStop();
-    setActiveStop(null);
-    setIncoming(null);
-    setStatus("waiting");
-  }
+  }, [playRingtone]);
 
   return (
     <div className="space-y-4 text-center">
       <h1 className="text-xl font-semibold">📞 Owner Call Dashboard</h1>
       <div className="text-sm opacity-70">{status}</div>
 
-      {/* debug box */}
-      <div className="mx-auto w-fit text-xs opacity-70 border rounded px-3 py-2">
+      <div className="mx-auto w-fit rounded border px-4 py-2 text-xs opacity-70">
         <div>user: {userId || "—"}</div>
-        <div>rt: {rtStatus}</div>
-        <div>last poll: {lastPoll || "—"}</div>
+        <div>rt: {rt}</div>
+        <div>last poll: {new Date().toLocaleTimeString()}</div>
+        <div>current: {currentIdRef.current || "—"}</div>
       </div>
 
       {incoming && status === "ringing" && (
-        <div className="p-4 border rounded bg-neutral-100 dark:bg-neutral-800">
-          <p className="mb-2">
+        <div className="mx-auto max-w-3xl rounded border bg-neutral-900/40 p-6">
+          <p className="mb-4">
             Incoming call for: <b>{incoming.plate}</b>
           </p>
           <div className="flex justify-center gap-3">
-            <button
-              onClick={acceptCall}
-              className="btn bg-green-600 text-white px-4 py-2 rounded"
-            >
+            <button onClick={acceptCall} className="btn bg-green-600 text-white">
               Accept
             </button>
-            <button
-              onClick={declineCall}
-              className="btn bg-red-600 text-white px-4 py-2 rounded"
-            >
+            <button onClick={declineCall} className="btn bg-red-600 text-white">
               Decline
             </button>
           </div>
@@ -206,10 +188,7 @@ export default function OwnerCallPage() {
       )}
 
       {status === "connected" && (
-        <button
-          onClick={endCall}
-          className="btn bg-red-600 text-white px-4 py-2 rounded"
-        >
+        <button onClick={endCall} className="btn bg-red-600 text-white">
           End Call
         </button>
       )}
