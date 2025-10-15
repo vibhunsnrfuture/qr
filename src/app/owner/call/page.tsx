@@ -1,86 +1,130 @@
+// src/app/owner/call/page.tsx
 "use client";
 
-import { useRef, useState } from "react";
+export const dynamic = "force-dynamic"; // opt out of static prerender
+
+import { useState } from "react";
+import type { ILocalAudioTrack, IAgoraRTCClient } from "agora-rtc-sdk-ng";
 import { supabase } from "@/lib/supabaseClient";
-import { getRtcToken } from "@/lib/agora";
-import type {
-  IAgoraRTCClient,
-  IRemoteAudioTrack,
-  IAgoraRTCRemoteUser,
-} from "agora-rtc-sdk-ng";
+
+let client: IAgoraRTCClient | null = null;
+
+// dynamic import so SSR never touches window
+async function getAgora() {
+  const mod = await import("agora-rtc-sdk-ng");
+  return mod;
+}
+
+async function getToken(channel: string, role: "publisher" | "subscriber") {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (!session?.access_token) throw new Error("Please sign in first.");
+
+  const baseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const resp = await fetch(`${baseUrl}/functions/v1/agora-token`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${session.access_token}`,
+    },
+    body: JSON.stringify({ channel, role }),
+  });
+  if (!resp.ok) throw new Error(await resp.text());
+  return resp.json() as Promise<{ appId: string; channel: string; uid: number; token: string }>;
+}
 
 export default function ReceiveCalls() {
   const [plate, setPlate] = useState("");
-  const [online, setOnline] = useState(false);
-  const clientRef = useRef<IAgoraRTCClient | null>(null);
+  const [joined, setJoined] = useState(false);
+  const [micOn, setMicOn] = useState(false);
+  const [localMic, setLocalMic] = useState<ILocalAudioTrack | null>(null);
 
-  const goOnline = async () => {
-    if (!plate.trim()) return alert("Enter your plate");
+  async function ensureClient() {
+    if (!client) {
+      const Agora = await getAgora();
+      client = Agora.default.createClient({ mode: "rtc", codec: "vp8" });
+    }
+  }
 
-    const AgoraRTC = (await import("agora-rtc-sdk-ng")).default;
-    const channelName = `car-${plate.trim().toUpperCase()}`;
-    const { appId, token } = await getRtcToken(channelName, 0, "publisher");
+  async function goOnline() {
+    const channel = plate.trim().toUpperCase();
+    if (!channel) return alert("Enter your plate/channel (e.g., UP20BB1234)");
 
-    const client: IAgoraRTCClient = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
-    clientRef.current = client;
+    await ensureClient();
+    const { appId, token, uid } = await getToken(channel, "subscriber");
+    await client!.join(appId, channel, token, uid || null);
 
-    // Auto-renew token
-    client.on("token-privilege-will-expire", async () => {
-      const fresh = await getRtcToken(channelName, 0, "publisher");
-      await client.renewToken(fresh.token);
-    });
-
-    // Subscribe to remote users (audio-only)
-    client.on("user-published", async (user: IAgoraRTCRemoteUser, mediaType: "audio" | "video") => {
-      const track =
-        mediaType === "audio"
-          ? (await client.subscribe(user, mediaType)) as IRemoteAudioTrack
-          : null; // ignore video
-
-      if (track) {
-        track.play(); // play remote audio
+    client!.on("user-published", async (user, mediaType) => {
+      if (mediaType === "audio") {
+        await client!.subscribe(user, "audio");
+        user.audioTrack?.play();
       }
     });
 
-    await client.join(appId, channelName, token, 0);
-    setOnline(true);
+    setJoined(true);
+  }
 
-    // Update Supabase profile
-    const { data: userData } = await supabase.auth.getUser();
-    if (userData.user?.id) {
-      await supabase.from("profiles").update({ is_online: true }).eq("id", userData.user.id);
+  async function toggleMic() {
+    const Agora = await getAgora();
+    await ensureClient();
+
+    if (!micOn) {
+      const mic = await Agora.default.createMicrophoneAudioTrack();
+      await client!.publish([mic]);
+      setLocalMic(mic);
+      setMicOn(true);
+    } else {
+      try {
+        if (localMic) {
+          await client!.unpublish([localMic]);
+          localMic.stop();
+          localMic.close();
+        }
+      } catch {}
+      setLocalMic(null);
+      setMicOn(false);
     }
-  };
+  }
 
-  const goOffline = async () => {
-    await clientRef.current?.leave();
-    clientRef.current = null;
-    setOnline(false);
-
-    const { data: userData } = await supabase.auth.getUser();
-    if (userData.user?.id) {
-      await supabase.from("profiles").update({ is_online: false }).eq("id", userData.user.id);
-    }
-  };
+  async function goOffline() {
+    try {
+      if (localMic) {
+        localMic.stop();
+        localMic.close();
+      }
+    } catch {}
+    try {
+      await client?.leave();
+    } catch {}
+    setLocalMic(null);
+    setMicOn(false);
+    setJoined(false);
+  }
 
   return (
-    <div className="max-w-md mx-auto mt-8 p-6 border rounded-lg shadow space-y-4">
-      <h2 className="text-2xl font-bold">Receive Calls</h2>
+    <div className="space-y-4 p-6">
+      <h2 className="text-xl font-semibold">Receive Calls</h2>
+
       <input
-        className="input w-full px-4 py-2 border rounded"
-        placeholder="Your plate"
+        className="input"
+        placeholder="Your vehicle plate (channel) e.g., UP20BB1234"
         value={plate}
         onChange={(e) => setPlate(e.target.value)}
       />
-      {!online ? (
-        <button className="btn w-full bg-blue-600 text-white py-2 rounded" onClick={goOnline}>
-          Go Online
-        </button>
+
+      {!joined ? (
+        <button className="btn" onClick={goOnline}>Go Online</button>
       ) : (
-        <button className="btn w-full bg-red-600 text-white py-2 rounded" onClick={goOffline}>
-          Go Offline
-        </button>
+        <div className="flex gap-2">
+          <button className="btn" onClick={toggleMic}>{micOn ? "Mic Off" : "Mic On"}</button>
+          <button className="btn" onClick={goOffline}>Go Offline</button>
+        </div>
       )}
+
+      <div className="text-sm text-white/60">
+        Channel: <span className="font-mono">{plate || "—"}</span> • {joined ? "Online" : "Offline"} • Mic: {micOn ? "On" : "Off"}
+      </div>
     </div>
   );
 }
