@@ -45,44 +45,31 @@ type CallRow = {
 };
 
 /* ---------------------------------------------------------------------------
-   Inline fallback for Agora (used only if "@/lib/agora".startCall is missing)
-   - Needs NEXT_PUBLIC_AGORA_APP_ID in env
-   - Expects an API route /api/agora-token?channel=<name> that returns:
-     { appId: string, token: string | null, uid?: number }
-   - If your token endpoint differs, update fetchAgToken()
+   Inline fallback for Agora (only if "@/lib/agora".startCall is missing)
 --------------------------------------------------------------------------- */
 async function fetchAgToken(channel: string): Promise<{
   appId: string;
   token: string | null;
   uid: number;
 }> {
-  // Try API route first
   try {
-    const res = await fetch(`/api/agora-token?channel=${encodeURIComponent(channel)}`, {
-      method: "GET",
-    });
+    const res = await fetch(`/api/agora-token?channel=${encodeURIComponent(channel)}`);
     if (res.ok) {
       const j = (await res.json()) as { appId?: string; token?: string | null; uid?: number };
-      if (j?.appId) {
-        return { appId: j.appId, token: j.token ?? null, uid: j.uid ?? 0 };
-      }
+      if (j?.appId) return { appId: j.appId, token: j.token ?? null, uid: j.uid ?? 0 };
     }
   } catch {
-    // ignore and fallback to env-only
+    /* ignore */
   }
-
   const appId = process.env.NEXT_PUBLIC_AGORA_APP_ID || "";
   if (!appId) throw new Error("Missing NEXT_PUBLIC_AGORA_APP_ID or token API.");
-  // For dev where certificate is disabled, token can be null
   return { appId, token: null, uid: 0 };
 }
 
-/** Fallback startCall: joins channel, publishes mic, plays remote audio, returns stop() */
 const inlineStartCall: StartCallFn = async (channel: string) => {
   if (typeof window === "undefined") return;
 
   const { default: AgoraRTC } = await import("agora-rtc-sdk-ng");
-  // Type hinting (optional)
   type IAgoraRTCClient = import("agora-rtc-sdk-ng").IAgoraRTCClient;
   type IMicrophoneAudioTrack = import("agora-rtc-sdk-ng").IMicrophoneAudioTrack;
   type IRemoteAudioTrack = import("agora-rtc-sdk-ng").IRemoteAudioTrack;
@@ -93,17 +80,13 @@ const inlineStartCall: StartCallFn = async (channel: string) => {
   const client: IAgoraRTCClient = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
   const localTracks: { mic: IMicrophoneAudioTrack | null } = { mic: null };
 
-  // Auto-renew token (optional safety)
   client.on("token-privilege-will-expire", async () => {
     try {
       const fresh = await fetchAgToken(channel);
       await client.renewToken(fresh.token || "");
-    } catch {
-      // ignore
-    }
+    } catch {}
   });
 
-  // Subscribe/attach remote audio
   client.on("user-published", async (user: IAgoraRTCRemoteUser, mediaType: "audio" | "video") => {
     await client.subscribe(user, mediaType);
     if (mediaType === "audio") {
@@ -112,18 +95,10 @@ const inlineStartCall: StartCallFn = async (channel: string) => {
     }
   });
 
-  client.on("user-unpublished", (user: IAgoraRTCRemoteUser, mediaType: "audio" | "video") => {
-    if (mediaType === "audio") {
-      // Agora handles stopping playback when track is unpublished
-    }
-  });
-
-  // Join & publish mic
   await client.join(appId, channel, token || null, uid || null);
   localTracks.mic = await AgoraRTC.createMicrophoneAudioTrack();
   await client.publish([localTracks.mic]);
 
-  // return stopper
   const stop: StopFn = async () => {
     try {
       if (localTracks.mic) {
@@ -131,14 +106,10 @@ const inlineStartCall: StartCallFn = async (channel: string) => {
         localTracks.mic.close();
         localTracks.mic = null;
       }
-    } catch {
-      // ignore
-    }
+    } catch {}
     try {
       await client.leave();
-    } catch {
-      // ignore
-    }
+    } catch {}
   };
 
   return stop;
@@ -156,25 +127,17 @@ export default function OwnerCallPage() {
   const [userId, setUserId] = useState<string>("");
   const [connecting, setConnecting] = useState(false);
 
-  /** track the call shown to avoid replaying same */
   const currentIdRef = useRef<string | null>(null);
-
-  /** ringtone player */
   const ringRef = useRef<HTMLAudioElement | null>(null);
-
-  /** stop() returned by startCall() */
   const stopRef = useRef<StopFn | null>(null);
 
-  /** ringtone helpers */
   const stopRingtone = useCallback((): void => {
     const a = ringRef.current;
     if (a) {
       try {
         a.pause();
         a.currentTime = 0;
-      } catch {
-        // no-op
-      }
+      } catch {}
       ringRef.current = null;
     }
   }, []);
@@ -183,12 +146,10 @@ export default function OwnerCallPage() {
     stopRingtone();
     const audio = new Audio("/ringtone.mp3");
     audio.loop = true;
-    // Ignore autoplay rejections
-    audio.play().catch(() => {});
+    void audio.play().catch(() => {});
     ringRef.current = audio;
   }, [stopRingtone]);
 
-  /** Update call session status (RLS must allow owner_id to update own rows) */
   async function updateStatus(id: string, next: CallRow["status"]) {
     const { error } = await supabase
       .from("call_sessions")
@@ -204,7 +165,6 @@ export default function OwnerCallPage() {
     if (error) console.error("updateStatus error:", error.message);
   }
 
-  /** Accept & join voice */
   async function acceptCall() {
     const call = incoming;
     if (!call) return;
@@ -214,7 +174,6 @@ export default function OwnerCallPage() {
     setStatus("connecting");
     await updateStatus(call.id, "accepted");
 
-    // Prefer your project helper if present; otherwise use inline fallback.
     let startCallToUse: StartCallFn | null = null;
     try {
       const mod = (await import("@/lib/agora")) as unknown as AgoraModule;
@@ -223,14 +182,16 @@ export default function OwnerCallPage() {
       startCallToUse = null;
     }
 
-    const stopMaybe = await (startCallToUse ? startCallToUse(call.channel) : inlineStartCall(call.channel));
-    stopRef.current = isStopFn(stopMaybe) ? stopMaybe : null;
+    const maybeStop = await (startCallToUse
+      ? startCallToUse(call.channel)
+      : inlineStartCall(call.channel));
+
+    stopRef.current = isStopFn(maybeStop) ? maybeStop : null;
 
     setConnecting(false);
     setStatus("connected");
   }
 
-  /** Decline */
   async function declineCall() {
     const call = incoming;
     if (!call) return;
@@ -242,19 +203,13 @@ export default function OwnerCallPage() {
     setStatus("waiting");
   }
 
-  /** Hang up */
   async function endCall() {
     stopRingtone();
-
     const call = incoming;
-    if (call) {
-      await updateStatus(call.id, "ended");
-    }
+    if (call) await updateStatus(call.id, "ended");
 
     const stopper = stopRef.current;
-    if (isStopFn(stopper)) {
-      await stopper();
-    }
+    if (isStopFn(stopper)) await stopper();
     stopRef.current = null;
 
     currentIdRef.current = null;
@@ -262,7 +217,6 @@ export default function OwnerCallPage() {
     setStatus("waiting");
   }
 
-  /** Show ringing if fresh & not already shown */
   const maybeShowRinging = useCallback(
     (row: CallRow) => {
       const isFresh = dayjs(row.created_at).isAfter(dayjs().subtract(2, "minute"));
@@ -277,7 +231,6 @@ export default function OwnerCallPage() {
     [playRingtone]
   );
 
-  /** Realtime + Poll */
   useEffect(() => {
     let isMounted = true;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -290,7 +243,6 @@ export default function OwnerCallPage() {
 
       setUserId(user.id);
 
-      // Subscribe to INSERT + UPDATE for this owner
       const channel = supabase
         .channel("call_sessions_owner")
         .on(
@@ -323,7 +275,7 @@ export default function OwnerCallPage() {
 
       realtimeChannel = channel;
 
-      // Poll fallback every 3s
+      // Poll fallback
       pollTimer = setInterval(async () => {
         const { data: rows, error } = await supabase
           .from("call_sessions")
@@ -343,12 +295,22 @@ export default function OwnerCallPage() {
     return () => {
       isMounted = false;
       if (pollTimer) clearInterval(pollTimer);
+
+      // Safe cleanup without ts-ignore
       try {
-        realtimeChannel?.unsubscribe?.();
-        // @ts-expect-error removeChannel may exist depending on SDK version
-        supabase.removeChannel?.(realtimeChannel);
+        if (realtimeChannel) {
+          // Prefer unsubscribe if available
+          (realtimeChannel as unknown as { unsubscribe?: () => void }).unsubscribe?.();
+
+          // Optional: remove from client if present (older/newer SDKs differ)
+          type SupabaseWithRemove = typeof supabase & {
+            removeChannel?: (ch: RealtimeChannel) => void;
+          };
+          const removeFn = (supabase as SupabaseWithRemove).removeChannel;
+          if (typeof removeFn === "function") removeFn(realtimeChannel);
+        }
       } catch {
-        // ignore
+        /* ignore */
       }
       stopRingtone();
     };
