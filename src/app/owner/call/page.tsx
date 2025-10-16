@@ -2,7 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
-import type { RealtimePostgresInsertPayload } from "@supabase/supabase-js";
+import type {
+  RealtimePostgresInsertPayload,
+  RealtimePostgresUpdatePayload,
+  RealtimeChannel,
+} from "@supabase/supabase-js";
 import dayjs from "dayjs";
 import { motion } from "framer-motion";
 import {
@@ -17,7 +21,18 @@ import {
   User2,
 } from "lucide-react";
 
-/** DB row shape */
+/* ------------------------------------------------------------------------------------------
+   Types for Agora interop + small type guard
+------------------------------------------------------------------------------------------ */
+type StopFn = () => Promise<void>;
+type StartCallFn = (ch: string) => Promise<StopFn | void>;
+type AgoraModule = { startCall?: StartCallFn };
+
+function isStopFn(v: unknown): v is StopFn {
+  return typeof v === "function";
+}
+
+/** DB row shape from public.call_sessions */
 type CallRow = {
   id: string;
   plate: string;
@@ -39,30 +54,39 @@ export default function OwnerCallPage() {
   const [userId, setUserId] = useState<string>("");
   const [connecting, setConnecting] = useState(false);
 
-  // track currently shown call id to avoid re-setting the same row
+  /** track the call we’re currently showing so we don’t replay the same one */
   const currentIdRef = useRef<string | null>(null);
+
+  /** ringtone player */
   const ringRef = useRef<HTMLAudioElement | null>(null);
 
-  // keep agora stop function, so we can end the call cleanly
-  const stopRef = useRef<null | (() => Promise<void>)>(null);
+  /** stop() returned by startCall() */
+  const stopRef = useRef<StopFn | null>(null);
 
-  // ---- helpers ----
-  const stopRingtone = useCallback(() => {
-    if (ringRef.current) {
-      ringRef.current.pause();
-      ringRef.current.currentTime = 0;
+  /** ringtone helpers */
+  const stopRingtone = useCallback((): void => {
+    const a = ringRef.current;
+    if (a) {
+      try {
+        a.pause();
+        a.currentTime = 0;
+      } catch {
+        // no-op
+      }
       ringRef.current = null;
     }
   }, []);
 
-  const playRingtone = useCallback(() => {
+  const playRingtone = useCallback((): void => {
     stopRingtone();
     const audio = new Audio("/ringtone.mp3");
     audio.loop = true;
-    void audio.play().catch(() => {});
+  
+    audio.play().catch(() => {});
     ringRef.current = audio;
   }, [stopRingtone]);
 
+  /** Update call session status (requires your RLS policy) */
   async function updateStatus(id: string, next: CallRow["status"]) {
     const { error } = await supabase
       .from("call_sessions")
@@ -78,58 +102,95 @@ export default function OwnerCallPage() {
     if (error) console.error("updateStatus error:", error.message);
   }
 
+  /** Accept & join via Agora */
   async function acceptCall() {
-    if (!incoming) return;
+    const call = incoming;
+    if (!call) return;
+
     stopRingtone();
     setConnecting(true);
     setStatus("connecting");
-    await updateStatus(incoming.id, "accepted");
+    await updateStatus(call.id, "accepted");
 
-    // join Agora (caller publish karega to audio aayega)
-    const { startCall } = await import("@/lib/agora");
-    const stop = await startCall(incoming.channel);
-    stopRef.current = stop;
+    // Type-safe dynamic import of your Agora helper
+    const mod = (await import("@/lib/agora")) as unknown as AgoraModule;
+    const startCall = mod.startCall;
+
+    if (startCall) {
+      const stopMaybe = await startCall(call.channel);
+      stopRef.current = isStopFn(stopMaybe) ? stopMaybe : null;
+    } else {
+      console.error("startCall not found in '@/lib/agora'");
+      stopRef.current = null;
+    }
 
     setConnecting(false);
     setStatus("connected");
   }
 
+  /** Decline call */
   async function declineCall() {
-    if (!incoming) return;
+    const call = incoming;
+    if (!call) return;
+
     stopRingtone();
-    await updateStatus(incoming.id, "declined");
+    await updateStatus(call.id, "declined");
     currentIdRef.current = null;
     setIncoming(null);
     setStatus("waiting");
   }
 
+  /** End call (hang up) */
   async function endCall() {
     stopRingtone();
-    if (incoming) {
-      await updateStatus(incoming.id, "ended");
+
+    const call = incoming;
+    if (call) {
+      await updateStatus(call.id, "ended");
     }
-    // stop local/remote audio and leave agora
-    if (stopRef.current) {
-      await stopRef.current();
-      stopRef.current = null;
+
+    const stopper = stopRef.current;
+    if (isStopFn(stopper)) {
+      await stopper();
     }
+    stopRef.current = null;
+
     currentIdRef.current = null;
     setIncoming(null);
     setStatus("waiting");
   }
 
-  // ---- realtime + poll ----
-  useEffect(() => {
-    let unsubscribed = false;
+  /** Show a ringing row if fresh & not already shown */
+  const maybeShowRinging = useCallback(
+    (row: CallRow) => {
+      const isFresh = dayjs(row.created_at).isAfter(dayjs().subtract(2, "minute"));
+      if (row.status === "ringing" && isFresh) {
+        if (currentIdRef.current === row.id) return;
+        currentIdRef.current = row.id;
+        setIncoming(row);
+        setStatus("ringing");
+        playRingtone();
+      }
+    },
+    [playRingtone]
+  );
 
-    (async () => {
-      const { data } = await supabase.auth.getUser();
-      const user = data.user;
+  /** Realtime + Poll (no async cleanup; effect cleanup is sync) */
+  useEffect(() => {
+    let isMounted = true;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+    let realtimeChannel: RealtimeChannel | null = null;
+
+   
+    supabase.auth.getUser().then(({ data }) => {
+      if (!isMounted) return;
+      const user = data?.user;
       if (!user) return;
+
       setUserId(user.id);
 
-      // Realtime subscribe just to NEW rows for this owner
-      const sub = supabase
+      // subscribe to INSERT + UPDATE for this owner
+      const channel = supabase
         .channel("call_sessions_owner")
         .on(
           "postgres_changes",
@@ -140,59 +201,62 @@ export default function OwnerCallPage() {
             filter: `owner_id=eq.${user.id}`,
           },
           (payload: RealtimePostgresInsertPayload<CallRow>) => {
-            const row = payload.new;
-            const recent =
-              dayjs(row.created_at).isAfter(dayjs().subtract(120, "second")) &&
-              row.status === "ringing";
-
-            if (recent && !unsubscribed) {
-              if (currentIdRef.current === row.id) return; // same row
-              currentIdRef.current = row.id;
-              setIncoming(row);
-              setStatus("ringing");
-              playRingtone();
-            }
+            if (!isMounted) return;
+            maybeShowRinging(payload.new as unknown as CallRow);
           }
         )
-        .subscribe((s) => {
-          setRt(s === "SUBSCRIBED" ? "SUBSCRIBED" : String(s));
-        });
+        .on(
+          "postgres_changes",
+          {
+            event: "UPDATE",
+            schema: "public",
+            table: "call_sessions",
+            filter: `owner_id=eq.${user.id}`,
+          },
+          (payload: RealtimePostgresUpdatePayload<CallRow>) => {
+            if (!isMounted) return;
+            maybeShowRinging(payload.new as unknown as CallRow);
+          }
+        )
+        .subscribe((s) => setRt(s === "SUBSCRIBED" ? "SUBSCRIBED" : String(s)));
 
-      // Fallback poll each 5s → only most recent ringing (last 60s)
-      const poll = setInterval(async () => {
+      realtimeChannel = channel;
+
+      // poll fallback every 3s
+      pollTimer = setInterval(async () => {
         const { data: rows, error } = await supabase
           .from("call_sessions")
           .select("*")
           .eq("owner_id", user.id)
           .eq("status", "ringing")
-          .gt("created_at", dayjs().subtract(60, "second").toISOString())
+          .gt("created_at", dayjs().subtract(2, "minute").toISOString())
           .order("created_at", { ascending: false })
           .limit(1);
-        if (error) return;
 
-        const row = rows?.[0];
-        if (!row) return;
-
-        if (currentIdRef.current !== row.id) {
-          currentIdRef.current = row.id;
-          setIncoming(row);
-          setStatus("ringing");
-          playRingtone();
+        if (!error && rows && rows[0]) {
+          maybeShowRinging(rows[0] as CallRow);
         }
-      }, 5000);
+      }, 3000);
+    });
 
-      // cleanup
-      return () => {
-        unsubscribed = true;
-        supabase.removeChannel(sub);
-        clearInterval(poll);
-      };
-    })();
+    return () => {
+      isMounted = false;
+      if (pollTimer) clearInterval(pollTimer);
 
-    // include playRingtone in deps to satisfy ESLint
-  }, [playRingtone]);
+      try {
+        // Prefer unsubscribe; removeChannel as optional fallback
+        realtimeChannel?.unsubscribe?.();
+        // @ts-expect-error removeChannel may exist at runtime depending on SDK minor
+        supabase.removeChannel?.(realtimeChannel);
+      } catch {
+        // no-op
+      }
+      stopRingtone();
+    };
+  }, [maybeShowRinging, stopRingtone]);
 
-  // ----- UI helpers -----
+  // ---------- UI ----------
+
   const StatusBadge = () => {
     const color =
       status === "connected"
@@ -220,7 +284,7 @@ export default function OwnerCallPage() {
 
   return (
     <div className="mx-auto w-full max-w-3xl p-4 sm:p-6">
-      {/* Top bar */}
+      {/* Header */}
       <div className="mb-4 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <motion.div
@@ -239,7 +303,7 @@ export default function OwnerCallPage() {
         <StatusBadge />
       </div>
 
-      {/* Debug strip (lightweight, helpful) */}
+      {/* Debug strip */}
       <div className="mb-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
         <div className="rounded-lg border border-white/10 bg-white/5 p-2">
           <div className="opacity-60">User</div>
@@ -255,11 +319,11 @@ export default function OwnerCallPage() {
         </div>
         <div className="rounded-lg border border-white/10 bg-white/5 p-2">
           <div className="opacity-60">Current Call</div>
-          <div className="truncate">{currentIdRef.current || "—"}</div>
+          <div className="truncate">{currentIdRef.current ?? "—"}</div>
         </div>
       </div>
 
-      {/* Waiting state */}
+      {/* Waiting */}
       {status === "waiting" && (
         <motion.div
           initial={{ y: 8, opacity: 0 }}
@@ -276,7 +340,7 @@ export default function OwnerCallPage() {
         </motion.div>
       )}
 
-      {/* Ringing card */}
+      {/* Ringing */}
       {incoming && status === "ringing" && (
         <motion.div
           initial={{ y: 8, opacity: 0 }}
@@ -293,22 +357,28 @@ export default function OwnerCallPage() {
                 <div className="text-xl font-bold tracking-wide">{incoming.plate}</div>
               </div>
             </div>
-            <div className="text-xs opacity-60">{dayjs(incoming.created_at).format("HH:mm:ss")}</div>
+            <div className="text-xs opacity-60">
+              {dayjs(incoming.created_at).format("HH:mm:ss")}
+            </div>
           </div>
 
           <div className="mt-2 flex flex-col gap-3 sm:flex-row">
             <button
               onClick={acceptCall}
               disabled={connecting}
-              className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-white shadow-lg shadow-emerald-600/20 hover:bg-emerald-500 active:scale-[0.98] transition"
+              className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-white shadow-lg shadow-emerald-600/20 transition hover:bg-emerald-500 active:scale-[0.98]"
             >
-              {connecting ? <Loader2 className="h-5 w-5 animate-spin" /> : <Check className="h-5 w-5" />}
+              {connecting ? (
+                <Loader2 className="h-5 w-5 animate-spin" />
+              ) : (
+                <Check className="h-5 w-5" />
+              )}
               {connecting ? "Connecting…" : "Accept"}
             </button>
 
             <button
               onClick={declineCall}
-              className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-red-600 px-4 py-3 text-white shadow-lg shadow-red-600/20 hover:bg-red-500 active:scale-[0.98] transition"
+              className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-red-600 px-4 py-3 text-white shadow-lg shadow-red-600/20 transition hover:bg-red-500 active:scale-[0.98]"
             >
               <X className="h-5 w-5" />
               Decline
@@ -317,7 +387,7 @@ export default function OwnerCallPage() {
         </motion.div>
       )}
 
-      {/* Connected controls */}
+      {/* Connected */}
       {status === "connected" && (
         <motion.div
           initial={{ y: 8, opacity: 0 }}
@@ -339,7 +409,7 @@ export default function OwnerCallPage() {
           <div className="flex flex-col gap-3 sm:flex-row">
             <button
               onClick={endCall}
-              className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-red-600 px-4 py-3 text-white shadow-lg shadow-red-600/20 hover:bg-red-500 active:scale-[0.98] transition"
+              className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-red-600 px-4 py-3 text-white shadow-lg shadow-red-600/20 transition hover:bg-red-500 active:scale-[0.98]"
             >
               <PhoneOff className="h-5 w-5" />
               End Call
