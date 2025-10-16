@@ -1,193 +1,162 @@
 // src/lib/agora.ts
-"use client";
+import AgoraRTC from "agora-rtc-sdk-ng";
 
-import type {
-  IAgoraRTCClient,
-  ILocalAudioTrack,
-  UID,
-} from "agora-rtc-sdk-ng";
+/** Minimal shapes (SDK full types import ki zarurat nahi) */
+type MediaType = "audio" | "video";
 
-/* ------------------------------------------------------------------ */
-/*  Internal client handling (SSR-safe, strict TypeScript friendly)   */
-/* ------------------------------------------------------------------ */
-
-let client: IAgoraRTCClient | null = null;
-
-async function getAgora() {
-  // Dynamic import so this never runs during SSR
-  const mod = await import("agora-rtc-sdk-ng");
-  return mod.default;
+interface RemoteAudioTrack {
+  play(): void;
+  stop?(): void;
+}
+interface RemoteUser {
+  uid?: string | number;
+  audioTrack?: RemoteAudioTrack;
+}
+interface LocalAudioTrack {
+  stop(): void;
+  close(): void;
 }
 
-/** Create (or return) a singleton client */
-async function getClient(): Promise<IAgoraRTCClient> {
-  if (client) return client;
-  const AgoraRTC = await getAgora();
-  client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
-  return client;
+/** Sirf woh methods jinhe hum use karte hain */
+interface MinimalClient {
+  join(
+    appId: string,
+    channel: string,
+    token: string,
+    uid?: number | null
+  ): Promise<void>;
+  leave(): Promise<void>;
+  publish(tracks: unknown[]): Promise<void>;
+  unpublish(tracks: unknown[]): Promise<void>;
+  subscribe(user: unknown, mediaType: MediaType): Promise<void>;
+  on(
+    event: "user-published" | "user-unpublished",
+    cb: (...args: unknown[]) => void
+  ): void;
 }
 
-/** Throws if client is not initialized (for strict TS) */
-function ensureClient(): IAgoraRTCClient {
-  if (!client) throw new Error("Agora client not initialized");
-  return client;
-}
+/** Module-level singletons */
+let client: MinimalClient | null = null;
+let localMic: LocalAudioTrack | null = null;
 
-/* ------------------------------------------------------------------ */
-/*                              Token API                              */
-/* ------------------------------------------------------------------ */
-
-type TokenResponse = {
-  appId: string;
-  channel: string;
-  uid: UID | 0;
-  token: string;
-  expireAt?: number;
-};
-
-/** Call the public Supabase function to get an RTC token */
-async function getToken(
-  channel: string,
-  role: "publisher" | "subscriber"
-): Promise<TokenResponse> {
-  const baseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-  if (!baseUrl) {
-    throw new Error("NEXT_PUBLIC_SUPABASE_URL is not defined");
-  }
-
-  const resp = await fetch(`${baseUrl}/functions/v1/agora-token`, {
+/** Helper: token from Next.js API */
+async function getToken(channel: string) {
+  const resp = await fetch(`/api/agora-token`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ channel: channel.toUpperCase(), role }),
+    body: JSON.stringify({ channel, role: "publisher" }),
   });
-
-  if (!resp.ok) {
-    // bubble up server error to the UI
-    throw new Error(await resp.text());
-  }
-  return (await resp.json()) as TokenResponse;
+  if (!resp.ok) throw new Error(await resp.text());
+  return resp.json() as Promise<{
+    appId: string;
+    channel: string;
+    uid: number;
+    token: string;
+  }>;
 }
 
-/* ------------------------------------------------------------------ */
-/*                          Public API (UI)                            */
-/* ------------------------------------------------------------------ */
+/** Start a call: join, mic create + publish, remote subscribe */
+export async function startCall(channel: string) {
+  // Create / reuse client
+  if (!client) {
+    client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" }) as unknown as MinimalClient;
 
-/**
- * Caller (QR side): join channel and publish the mic.
- * Returns a cleanup function that hangs up.
- */
-export async function startCall(
-  channel: string
-): Promise<() => Promise<void>> {
-  const normalized = channel.toUpperCase();
-  const AgoraRTC = await getAgora();
-  const c = await getClient();
+    client.on("user-published", async (...args: unknown[]) => {
+      // args: [user, mediaType]
+      const user = args[0] as RemoteUser;
+      const mediaType = args[1] as MediaType;
 
-  // Ask mic permission early
-  const mic: ILocalAudioTrack = await AgoraRTC.createMicrophoneAudioTrack();
+      try {
+        if (mediaType === "audio") {
+          await client!.subscribe(user as unknown, "audio");
+          user.audioTrack?.play();
+        }
+      } catch {
+        /* no-op */
+      }
+    });
 
-  const { appId, token, uid } = await getToken(normalized, "publisher");
-  await c.join(appId, normalized, token, uid || null);
-  await c.publish([mic]);
-
-  // Subscribe to any remote audio
-  c.on("user-published", async (user, mediaType) => {
-    if (mediaType === "audio") {
-      await ensureClient().subscribe(user, "audio");
-      user.audioTrack?.play();
-      console.log("[caller] subscribed audio from", user.uid);
-    }
-  });
-
-  // Handle users who were already published before handler bound
-  for (const ru of c.remoteUsers) {
-    if (ru.hasAudio) {
-      await c.subscribe(ru, "audio");
-      ru.audioTrack?.play();
-      console.log("[caller] subscribed existing audio from", ru.uid);
-    }
+    client.on("user-unpublished", (...args: unknown[]) => {
+      const user = args[0] as RemoteUser;
+      try {
+        user.audioTrack?.stop?.();
+      } catch {
+        /* no-op */
+      }
+    });
   }
 
-  // cleanup / hangup
-  return async () => {
+  // Get token
+  const { appId, token, uid } = await getToken(channel);
+
+  // Join the channel
+  await client.join(appId, channel, token, uid || null);
+
+  // Create and publish mic track
+  const mic = await AgoraRTC.createMicrophoneAudioTrack();
+  localMic = mic as unknown as LocalAudioTrack;
+
+  // MinimalClient expects unknown[], so direct pass ok
+  await client.publish([localMic]);
+
+  // Return stop function
+  return async function stop() {
     try {
-      mic.stop();
-      mic.close();
-    } catch {}
-    try {
-      await ensureClient().leave();
-    } catch {}
+      if (client) {
+        if (localMic) {
+          try {
+            await client.unpublish([localMic]);
+          } catch {
+            /* no-op */
+          }
+          try {
+            localMic.stop();
+          } catch {
+            /* no-op */
+          }
+          try {
+            localMic.close();
+          } catch {
+            /* no-op */
+          }
+          localMic = null;
+        }
+        await client.leave();
+      }
+    } finally {
+      client = null;
+    }
   };
 }
 
-/**
- * Receiver (owner): join as subscriber, auto-play remote audio,
- * and optionally publish mic for two-way talk.
- *
- * Returns controls: toggleMic(on?) and leave().
- */
-export async function joinAsReceiver(channel: string) {
-  const normalized = channel.toUpperCase();
-  const AgoraRTC = await getAgora();
-  const c = await getClient();
+/** Toggle local mic on/off (optional helper) */
+export async function setMic(enabled: boolean) {
+  if (!client) return;
 
-  // Join with a subscriber token
-  const { appId, token, uid } = await getToken(normalized, "subscriber");
-  await c.join(appId, normalized, token, uid || null);
-
-  // Play any new remote audio
-  c.on("user-published", async (user, mediaType) => {
-    if (mediaType === "audio") {
-      await ensureClient().subscribe(user, "audio");
-      user.audioTrack?.play();
-      console.log("[receiver] subscribed new audio from", user.uid);
+  if (enabled) {
+    if (!localMic) {
+      const mic = await AgoraRTC.createMicrophoneAudioTrack();
+      localMic = mic as unknown as LocalAudioTrack;
+      await client.publish([localMic]);
     }
-  });
-
-  // Also play users that were already published
-  for (const ru of c.remoteUsers) {
-    if (ru.hasAudio) {
-      await c.subscribe(ru, "audio");
-      ru.audioTrack?.play();
-      console.log("[receiver] subscribed existing audio from", ru.uid);
-    }
-  }
-
-  // Optional local mic for two-way talk
-  let localMic: ILocalAudioTrack | null = null;
-
-  async function toggleMic(on?: boolean) {
-    const wantOn = on ?? !localMic;
-
-    if (wantOn && !localMic) {
-      localMic = await AgoraRTC.createMicrophoneAudioTrack();
-      await ensureClient().publish([localMic]);
-      console.log("[receiver] mic ON");
-    } else if (!wantOn && localMic) {
-      await ensureClient().unpublish([localMic]);
+  } else {
+    if (localMic) {
+      try {
+        await client.unpublish([localMic]);
+      } catch {
+        /* no-op */
+      }
       try {
         localMic.stop();
-        localMic.close();
-      } finally {
-        localMic = null;
+      } catch {
+        /* no-op */
       }
-      console.log("[receiver] mic OFF");
+      try {
+        localMic.close();
+      } catch {
+        /* no-op */
+      }
+      localMic = null;
     }
   }
-
-  async function leave() {
-    try {
-      if (localMic) {
-        await ensureClient().unpublish([localMic]);
-        localMic.stop();
-        localMic.close();
-        localMic = null;
-      }
-    } catch {}
-    try {
-      await ensureClient().leave();
-    } catch {}
-  }
-
-  return { toggleMic, leave };
 }

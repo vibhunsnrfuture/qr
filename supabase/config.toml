@@ -1,8 +1,0 @@
-project_id = "xfxwmqoeclarxyrnroke"
-
-[functions]
-[functions.agora-token]
-enabled = true
-verify_jwt = false
-import_map = "./functions/agora-token/deno.json"
-entrypoint = "./functions/agora-token/index.ts"
