@@ -1,21 +1,22 @@
-// src/app/owner/call/page.tsx
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import dayjs from "dayjs";
 import { supabase } from "@/lib/supabaseClient";
 import type {
   RealtimeChannel,
   RealtimePostgresInsertPayload,
   RealtimePostgresUpdatePayload,
 } from "@supabase/supabase-js";
-import dayjs from "dayjs";
 import { Phone, PhoneIncoming, PhoneOff, Wifi, Loader2, Mic, User2, Check, X } from "lucide-react";
+
+/* ----------------------------- types & helpers ---------------------------- */
 
 type StopFn = () => Promise<void>;
 type StartCallFn = (channel: string) => Promise<StopFn | void>;
 
 type CallRow = {
-  id: string;
+  id: number | string;
   plate: string;
   owner_id: string;
   channel: string;
@@ -30,7 +31,7 @@ function isCallRow(x: unknown): x is CallRow {
   if (!x || typeof x !== "object") return false;
   const r = x as Partial<CallRow>;
   return (
-    typeof r.id === "string" &&
+    (typeof r.id === "string" || typeof (r.id as unknown) === "number") &&  // ← yeh line badli
     typeof r.plate === "string" &&
     typeof r.owner_id === "string" &&
     typeof r.channel === "string" &&
@@ -38,15 +39,11 @@ function isCallRow(x: unknown): x is CallRow {
     typeof r.created_at === "string"
   );
 }
-const isStopFn = (v: unknown): v is StopFn => typeof v === "function";
-
-// helper to avoid `any`
-type SupabaseWithRemove = typeof supabase & {
-  removeChannel?: (ch: RealtimeChannel) => void;
-};
-function removeChannelSafe(client: SupabaseWithRemove, ch: RealtimeChannel) {
-  client.removeChannel?.(ch);
+function isStopFn(v: unknown): v is StopFn {
+  return typeof v === "function";
 }
+
+/* --------------------------------- page ---------------------------------- */
 
 export default function OwnerCallPage() {
   const [incoming, setIncoming] = useState<CallRow | null>(null);
@@ -54,12 +51,13 @@ export default function OwnerCallPage() {
   const [rt, setRt] = useState("INIT");
   const [userId, setUserId] = useState<string>("");
   const [connecting, setConnecting] = useState(false);
+  const [now, setNow] = useState<string>("");
 
-  const currentIdRef = useRef<string | null>(null);
+  const currentIdRef = useRef<string | number | null>(null);
   const ringRef = useRef<HTMLAudioElement | null>(null);
   const stopRef = useRef<StopFn | null>(null);
 
-  const [now, setNow] = useState<string>("");
+  // clock (client-only)
   useEffect(() => {
     setNow(new Date().toLocaleTimeString());
     const id = setInterval(() => setNow(new Date().toLocaleTimeString()), 1000);
@@ -75,6 +73,7 @@ export default function OwnerCallPage() {
     } catch {}
     ringRef.current = null;
   }, []);
+
   const playRingtone = useCallback(() => {
     stopRingtone();
     const audio = new Audio("/ringtone.mp3");
@@ -105,15 +104,17 @@ export default function OwnerCallPage() {
     stopRingtone();
     setConnecting(true);
     setStatus("connecting");
-    await updateStatus(call.id, "accepted");
+    await updateStatus(String(call.id), "accepted");
 
     let startCallToUse: StartCallFn | null = null;
     try {
+      // dynamic import to keep SSR clean
       const mod = await import("@/lib/agora");
       startCallToUse = (mod as unknown as { startCall?: StartCallFn }).startCall ?? null;
     } catch {
       startCallToUse = null;
     }
+
     const mayStop = await (startCallToUse ? startCallToUse(call.channel) : Promise.resolve(undefined));
     stopRef.current = isStopFn(mayStop) ? mayStop : null;
 
@@ -125,31 +126,39 @@ export default function OwnerCallPage() {
     const call = incoming;
     if (!call) return;
     stopRingtone();
-    await updateStatus(call.id, "declined");
+    await updateStatus(String(call.id), "declined");
     currentIdRef.current = null;
     setIncoming(null);
     setStatus("waiting");
   }
 
   async function endCall() {
-    stopRingtone();
-    const call = incoming;
-    if (call) await updateStatus(call.id, "ended");
+  stopRingtone();
 
-    const stopper = stopRef.current;
-    if (isStopFn(stopper)) await stopper();
-    stopRef.current = null;
-
-    currentIdRef.current = null;
-    setIncoming(null);
+  const call = incoming;
+  if (!call) {                // <-- guard
     setStatus("waiting");
+    return;
   }
 
+  await updateStatus(String(call.id), "ended");
+
+  const stopper = stopRef.current;
+  if (isStopFn(stopper)) await stopper();
+  stopRef.current = null;
+
+  currentIdRef.current = null;
+  setIncoming(null);
+  setStatus("waiting");
+}
+
+  // 🔧 Fresher window 10 minutes
   const maybeShowRinging = useCallback(
     (row: CallRow) => {
-      const fresh = dayjs(row.created_at).isAfter(dayjs().subtract(2, "minute"));
+      const fresh = dayjs(row.created_at).isAfter(dayjs().subtract(10, "minute"));
       if (row.status === "ringing" && fresh) {
         if (currentIdRef.current === row.id) return;
+        console.log("📞 Show incoming:", row);
         currentIdRef.current = row.id;
         setIncoming(row);
         setStatus("ringing");
@@ -177,6 +186,7 @@ export default function OwnerCallPage() {
           "postgres_changes",
           { event: "INSERT", schema: "public", table: "call_sessions", filter: `owner_id=eq.${user.id}` },
           (payload: RealtimePostgresInsertPayload<Record<string, unknown>>) => {
+            console.log("🔔 RT event:", payload.eventType, payload.new);
             const row = payload.new;
             if (isCallRow(row)) maybeShowRinging(row);
           }
@@ -185,20 +195,20 @@ export default function OwnerCallPage() {
           "postgres_changes",
           { event: "UPDATE", schema: "public", table: "call_sessions", filter: `owner_id=eq.${user.id}` },
           (payload: RealtimePostgresUpdatePayload<Record<string, unknown>>) => {
+            console.log("🔔 RT event:", payload.eventType, payload.new);
             const row = payload.new;
             if (isCallRow(row)) maybeShowRinging(row);
           }
         )
         .subscribe((s) => setRt(s === "SUBSCRIBED" ? "SUBSCRIBED" : String(s)));
 
-      // safety net polling
+      // 🛟 Safety-net polling: *no strict time filter*, just latest ringing
       pollTimer = setInterval(async () => {
         const { data: rows, error } = await supabase
           .from("call_sessions")
           .select("*")
           .eq("owner_id", user.id)
           .eq("status", "ringing")
-          .gt("created_at", dayjs().subtract(2, "minute").toISOString())
           .order("created_at", { ascending: false })
           .limit(1);
 
@@ -214,21 +224,14 @@ export default function OwnerCallPage() {
       try {
         if (channel) {
           (channel as unknown as { unsubscribe?: () => void }).unsubscribe?.();
-          // no 'any' — typed helper
-          removeChannelSafe(supabase as SupabaseWithRemove, channel);
+          supabase.removeChannel(channel);
         }
       } catch {}
       stopRingtone();
     };
   }, [maybeShowRinging, stopRingtone]);
 
-  /* --- UI below unchanged --- */
-  // (keep your existing JSX here; omitted for brevity)
-  // ... paste back your JSX exactly as before ...
-
-
-
-  /* ------------------------------- UI ---------------------------------- */
+  /* --------------------------------- UI ---------------------------------- */
 
   const StatusBadge = () => {
     const cls =
@@ -277,11 +280,13 @@ export default function OwnerCallPage() {
         </div>
         <div className="rounded-lg border border-white/10 bg-white/5 p-2">
           <div className="opacity-60">Time</div>
-          <div className="truncate" suppressHydrationWarning>{now || "—"}</div>
+          <div className="truncate" suppressHydrationWarning>
+            {now || "—"}
+          </div>
         </div>
         <div className="rounded-lg border border-white/10 bg-white/5 p-2">
           <div className="opacity-60">Current Call</div>
-          <div className="truncate">{currentIdRef.current ?? "—"}</div>
+          <div className="truncate">{currentIdRef.current != null ? String(currentIdRef.current) : "—"}</div>
         </div>
       </div>
 
@@ -316,14 +321,16 @@ export default function OwnerCallPage() {
             <button
               onClick={acceptCall}
               disabled={connecting}
-              className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-white shadow-lg shadow-emerald-600/20 transition hover:bg-emerald-500 active:scale-[0.98]">
+              className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-white shadow-lg shadow-emerald-600/20 transition hover:bg-emerald-500 active:scale-[0.98]"
+            >
               {connecting ? <Loader2 className="h-5 w-5 animate-spin" /> : <Check className="h-5 w-5" />}
               {connecting ? "Connecting…" : "Accept"}
             </button>
 
             <button
               onClick={declineCall}
-              className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-red-600 px-4 py-3 text-white shadow-lg shadow-red-600/20 transition hover:bg-red-500 active:scale-[0.98]">
+              className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-red-600 px-4 py-3 text-white shadow-lg shadow-red-600/20 transition hover:bg-red-500 active:scale-[0.98]"
+            >
               <X className="h-5 w-5" />
               Decline
             </button>
@@ -347,7 +354,8 @@ export default function OwnerCallPage() {
           <div className="flex flex-col gap-3 sm:flex-row">
             <button
               onClick={endCall}
-              className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-red-600 px-4 py-3 text-white shadow-lg shadow-red-600/20 transition hover:bg-red-500 active:scale-[0.98]">
+              className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-red-600 px-4 py-3 text-white shadow-lg shadow-red-600/20 transition hover:bg-red-500 active:scale-[0.98]"
+            >
               <PhoneOff className="h-5 w-5" />
               End Call
             </button>
