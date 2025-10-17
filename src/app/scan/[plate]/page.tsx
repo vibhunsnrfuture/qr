@@ -2,9 +2,8 @@
 
 import { useState } from "react";
 import { useParams } from "next/navigation";
-import { startCall } from "@/lib/agora";   // ⬅️ only import startCall
+import { startCall } from "@/lib/agora";
 
-// Add this local type (don't import it)
 type StopFn = () => Promise<void>;
 
 export default function ScanCallPage() {
@@ -18,10 +17,7 @@ export default function ScanCallPage() {
   async function onStart() {
     try {
       setError(null);
-      if (!plate) {
-        setError("Missing plate");
-        return;
-      }
+      if (!plate) return setError("Missing plate");
 
       // 1) create ringing row (dashboard will ring)
       const resp = await fetch("/api/call/start", {
@@ -37,9 +33,11 @@ export default function ScanCallPage() {
         throw new Error(t?.error || "Failed to start call session");
       }
 
-      // 2) join Agora
+      // 2) always use channel returned by server
+      const { call } = await resp.json();
+
       setStatus("calling");
-      const stop = await startCall(plate);
+      const stop = await startCall(call.channel);
       setStopFn(() => stop);
       setStatus("oncall");
     } catch (e) {

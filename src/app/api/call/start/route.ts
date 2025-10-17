@@ -1,13 +1,22 @@
+// src/app/api/call/start/route.ts
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 type VehicleRow = { plate: string; owner_id: string };
+
+type CallerInfo = Record<string, unknown>;
+type Body = {
+  plate?: string;
+  via?: string;
+  caller_info?: CallerInfo;
+};
+
 type CallInsert = {
   plate: string;
   owner_id: string;
   channel: string;
   status: "ringing";
-  caller_info: Record<string, unknown>;
+  caller_info: CallerInfo;
 };
 
 const URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -21,17 +30,18 @@ function bad(msg: string, code = 400) {
 export async function POST(req: Request) {
   try {
     if (!URL || !SERVICE_KEY) return bad("Server env not configured", 500);
-
     const supabase = createClient(URL, SERVICE_KEY);
 
-    const body = (await req.json().catch(() => ({}))) as { plate?: string; via?: string };
+    // parse JSON safely with types
+    const bodyText = await req.text();
+    const body: Body = bodyText ? (JSON.parse(bodyText) as Body) : {};
+
     const rawPlate = (body.plate ?? "").trim();
     if (!rawPlate) return bad("Missing plate");
 
-    // normalize: trim + uppercase
     const norm = rawPlate.toUpperCase();
 
-    // Try exact match on normalized plate
+    // exact match
     const { data: byExact, error: exErr } = await supabase
       .from("vehicles")
       .select("plate, owner_id")
@@ -42,28 +52,26 @@ export async function POST(req: Request) {
 
     let vehicle: VehicleRow | undefined = (byExact ?? [])[0] as VehicleRow | undefined;
 
-    // If exact didn’t find anything, try case-insensitive (ILike needs %)
+    // case-insensitive fallback
     if (!vehicle) {
       const { data: byLike, error: likeErr } = await supabase
         .from("vehicles")
         .select("plate, owner_id")
-        .ilike("plate", norm) // norm is already uppercase; ILIKE works case-insensitive
+        .ilike("plate", norm)
         .limit(1);
 
       if (likeErr) return bad(`DB error: ${likeErr.message}`, 500);
       vehicle = (byLike ?? [])[0] as VehicleRow | undefined;
     }
 
-    if (!vehicle) {
-      return bad(`No owner found for plate "${rawPlate}" (normalized "${norm}")`, 404);
-    }
+    if (!vehicle) return bad(`No owner found for plate "${rawPlate}"`, 404);
 
     const payload: CallInsert = {
-      plate: vehicle.plate, // keep canonical plate from DB
+      plate: vehicle.plate,
       owner_id: vehicle.owner_id,
       channel: vehicle.plate, // channel == plate
       status: "ringing",
-      caller_info: { via: body.via ?? "api" },
+      caller_info: body.caller_info ?? { via: body.via ?? "api" },
     };
 
     const { data: inserted, error: insErr } = await supabase

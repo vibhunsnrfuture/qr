@@ -2,11 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { RtcRole, RtcTokenBuilder } from "agora-access-token";
 
-type Body = {
-  channel: string;
-  role?: "publisher" | "subscriber";
-  ttlSeconds?: number;
-};
+type Body = { channel: string; role?: "publisher" | "subscriber"; ttlSeconds?: number };
 
 export async function POST(req: NextRequest) {
   try {
@@ -25,19 +21,10 @@ export async function POST(req: NextRequest) {
     }
 
     const expireAt = Math.floor(Date.now() / 1000) + Number(ttlSeconds || 3600);
-    // ✅ unique numeric UID per token
     const uid = Math.floor(Math.random() * 2_000_000_000);
     const rtcRole = role === "publisher" ? RtcRole.PUBLISHER : RtcRole.SUBSCRIBER;
 
-    const token = RtcTokenBuilder.buildTokenWithUid(
-      APP_ID,
-      APP_CERT,
-      channel,
-      uid,
-      rtcRole,
-      expireAt
-    );
-
+    const token = RtcTokenBuilder.buildTokenWithUid(APP_ID, APP_CERT, channel, uid, rtcRole, expireAt);
     return NextResponse.json({ appId: APP_ID, channel, uid, token, expireAt });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Unknown error";

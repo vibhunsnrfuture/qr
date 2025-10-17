@@ -22,40 +22,30 @@ let client: IAgoraRTCClient | null = null;
 let mic: IMicrophoneAudioTrack | null = null;
 
 export async function startCall(channel: string) {
-  // Create client once
   if (!client) {
     client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
 
-    client.on(
-      "user-published",
-      async (user: IAgoraRTCRemoteUser, mediaType: "audio" | "video") => {
-        if (mediaType === "audio") {
-          await client!.subscribe(user, "audio");
-          const track: IRemoteAudioTrack | undefined = user.audioTrack ?? undefined;
-          track?.play(); // ✅ plays remote audio
-        }
+    client.on("user-published", async (user: IAgoraRTCRemoteUser, mediaType: "audio" | "video") => {
+      if (mediaType === "audio") {
+        await client!.subscribe(user, "audio");
+        const track: IRemoteAudioTrack | undefined = user.audioTrack ?? undefined;
+        track?.play();
       }
-    );
+    });
 
     client.on("user-unpublished", (user) => {
       try {
         user.audioTrack?.stop();
-      } catch {
-        /* noop */
-      }
+      } catch {}
     });
   }
 
   const { appId, token, uid } = await getToken(channel);
-
-  // Join with the UID returned by the token (must match!)
   await client.join(appId, channel, token, uid);
 
-  // Publish *your* mic
   mic = await AgoraRTC.createMicrophoneAudioTrack();
   await client.publish([mic]);
 
-  // Return a proper stop fn
   return async function stop() {
     try {
       if (mic) {
