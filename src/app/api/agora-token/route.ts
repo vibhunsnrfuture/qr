@@ -1,95 +1,46 @@
 // src/app/api/agora-token/route.ts
-// Next.js Node runtime API for Agora tokens (GET for browser test, POST for app)
+import { NextRequest, NextResponse } from "next/server";
+import { RtcRole, RtcTokenBuilder } from "agora-access-token";
 
-import { NextRequest } from "next/server";
-import { RtcTokenBuilder, RtcRole } from "agora-access-token";
-
-export const runtime = "nodejs";
-
-function mustEnv(name: string) {
-  const v = process.env[name];
-  if (!v) throw new Error(`Missing environment variable: ${name}`);
-  return v;
-}
-
-const AGORA_APP_ID = mustEnv("AGORA_APP_ID");
-const AGORA_APP_CERTIFICATE = mustEnv("AGORA_APP_CERTIFICATE");
-
-const cors = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-  "Access-Control-Allow-Headers": "content-type",
+type Body = {
+  channel: string;
+  role?: "publisher" | "subscriber";
+  ttlSeconds?: number;
 };
 
-function buildToken(
-  channel: string,
-  uid = 0,
-  role: "publisher" | "subscriber" = "publisher",
-  ttlSeconds = 3600
-) {
-  const expireAt = Math.floor(Date.now() / 1000) + Number(ttlSeconds);
-  const rtcRole = role === "subscriber" ? RtcRole.SUBSCRIBER : RtcRole.PUBLISHER;
-
-  const token = RtcTokenBuilder.buildTokenWithUid(
-    AGORA_APP_ID,
-    AGORA_APP_CERTIFICATE,
-    String(channel),
-    Number(uid),
-    rtcRole,
-    expireAt
-  );
-
-  return { appId: AGORA_APP_ID, channel, uid, token, expireAt };
-}
-
-export async function OPTIONS() {
-  return new Response(null, { headers: cors });
-}
-
-// ⭐ GET: browser test
-export async function GET(req: NextRequest) {
-  const url = new URL(req.url);
-  const channel = url.searchParams.get("channel");
-
-  if (!channel) {
-    const html = `
-      <html>
-        <body style="font-family: sans-serif; padding: 20px">
-          <h3>Agora Token API</h3>
-          <p>Use POST from your app, or test via GET:</p>
-          <pre>GET /api/agora-token?channel=TEST123</pre>
-          <p><b>Note:</b> Don’t expose these tokens publicly.</p>
-        </body>
-      </html>`;
-    return new Response(html, { headers: { "Content-Type": "text/html", ...cors } });
-  }
-
-  const data = buildToken(channel);
-  return Response.json(data, { headers: cors });
-}
-
-// ⭐ POST: for app
 export async function POST(req: NextRequest) {
   try {
-    const { channel, uid = 0, role = "publisher", ttlSeconds = 3600 } =
-      (await req.json()) as {
-        channel: string;
-        uid?: number;
-        role?: "publisher" | "subscriber";
-        ttlSeconds?: number;
-      };
+    const { channel, role = "publisher", ttlSeconds = 3600 } = (await req.json()) as Body;
+    if (!channel || typeof channel !== "string") {
+      return NextResponse.json({ message: "channel required" }, { status: 400 });
+    }
 
-    if (!channel)
-      return new Response("Missing 'channel'", { status: 400, headers: cors });
+    const APP_ID = process.env.AGORA_APP_ID ?? "";
+    const APP_CERT = process.env.AGORA_APP_CERTIFICATE ?? "";
+    if (!APP_ID || !APP_CERT) {
+      return NextResponse.json(
+        { message: "Missing AGORA_APP_ID / AGORA_APP_CERTIFICATE" },
+        { status: 500 }
+      );
+    }
 
-    const data = buildToken(channel, Number(uid), role, Number(ttlSeconds));
-    return Response.json(data, { headers: cors });
-  } catch (error) {
-    // ✅ Explicitly type the caught variable
-    const err = error as Error;
-    return new Response(err.message || "Server error", {
-      status: 500,
-      headers: cors,
-    });
+    const expireAt = Math.floor(Date.now() / 1000) + Number(ttlSeconds || 3600);
+    // ✅ unique numeric UID per token
+    const uid = Math.floor(Math.random() * 2_000_000_000);
+    const rtcRole = role === "publisher" ? RtcRole.PUBLISHER : RtcRole.SUBSCRIBER;
+
+    const token = RtcTokenBuilder.buildTokenWithUid(
+      APP_ID,
+      APP_CERT,
+      channel,
+      uid,
+      rtcRole,
+      expireAt
+    );
+
+    return NextResponse.json({ appId: APP_ID, channel, uid, token, expireAt });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "Unknown error";
+    return NextResponse.json({ message }, { status: 500 });
   }
 }

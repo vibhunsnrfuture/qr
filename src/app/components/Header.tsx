@@ -1,224 +1,116 @@
 "use client";
-
-import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabaseClient";
-import { usePathname } from "next/navigation";
 import Link from "next/link";
-import { motion } from "framer-motion";
-import {
-  CarFront,
-  QrCode,
-  Phone,
-  User2,
-  LogOut,
-  LogIn,
-  UserPlus,
-  Menu,
-  ChevronDown,
-} from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { supabase } from "@/lib/supabaseClient";
+import { User } from "@supabase/supabase-js";
 
-type UserLite = {
-  id: string;
-  email?: string;
-};
-
-// ✅ Lucide icons are React components that accept SVG props
-type IconType = React.ComponentType<React.SVGProps<SVGSVGElement>>;
+type Profile = { id: string; full_name: string | null };
 
 export default function Header() {
-  const [user, setUser] = useState<UserLite | null>(null);
+  const [user, setUser] = useState<User | null>(null);
+  const [profile, setProfile] = useState<Profile | null>(null);
   const [open, setOpen] = useState(false);
-  const [menu, setMenu] = useState(false);
-  const pathname = usePathname();
+  const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    let active = true;
-    (async () => {
-      const { data } = await supabase.auth.getUser();
-      if (!active) return;
-      setUser(data.user ? { id: data.user.id, email: data.user.email ?? undefined } : null);
-    })();
-
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {
-      setUser(session?.user ? { id: session.user.id, email: session.user.email ?? undefined } : null);
+    // 1) load session
+    supabase.auth.getSession().then(({ data }) => {
+      const u = data.session?.user || null;
+      setUser(u);
+      if (u) loadProfile(u.id);
     });
 
+    // 2) session change listener
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {
+      const u = session?.user || null;
+      setUser(u);
+      if (u) loadProfile(u?.id ?? "") ; else setProfile(null);
+    });
+
+    // 3) close dropdown on outside click
+    function onClick(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setOpen(false);
+    }
+    window.addEventListener("click", onClick);
+
     return () => {
-      active = false;
       sub.subscription.unsubscribe();
+      window.removeEventListener("click", onClick);
     };
   }, []);
 
+  async function loadProfile(id: string) {
+    if (!id) return;
+    const { data } = await supabase.from("profiles").select("id, full_name").eq("id", id).single();
+    setProfile(data || null);
+  }
+
   async function signOut() {
     await supabase.auth.signOut();
-    setMenu(false);
     location.href = "/";
   }
 
-  // ✅ icon prop now strongly typed
-  const NavLink = ({
-    href,
-    label,
-    icon: Icon,
-  }: {
-    href: string;
-    label: string;
-    icon: IconType;
-  }) => {
-    const active = pathname === href;
-    return (
-      <Link
-        href={href}
-        className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm transition ${
-          active ? "bg-white/10 text-white" : "text-white/80 hover:text-white hover:bg-white/5"
-        }`}
-        onClick={() => setOpen(false)}
-      >
-        <Icon className="h-4 w-4" />
-        {label}
-      </Link>
-    );
-  };
+  const initials =
+    profile?.full_name?.trim()?.[0]?.toUpperCase() ??
+    user?.email?.[0]?.toUpperCase() ??
+    "U";
 
   return (
-    <div className="sticky top-0 z-40 w-full bg-gradient-to-b from-black/60 to-transparent backdrop-blur">
-      <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
-        {/* Brand */}
-        <Link href="/" className="flex items-center gap-3">
-          <motion.div
-            initial={{ rotate: -8, scale: 0.9, opacity: 0 }}
-            animate={{ rotate: 0, scale: 1, opacity: 1 }}
-            transition={{ type: "spring", stiffness: 260, damping: 18 }}
-            className="inline-flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-600 to-fuchsia-600 text-white shadow-lg"
-          >
-            <QrCode className="h-5 w-5" />
-          </motion.div>
-          <div className="leading-tight">
-            <div className="text-sm font-semibold">Scan to Call</div>
-            <div className="text-[11px] opacity-60">Owners • Guests • Admin</div>
-          </div>
-        </Link>
+    <nav className="flex justify-between items-center p-4 border-b bg-black text-white">
+      <Link href="/" className="font-bold text-lg">Scan-to-Call</Link>
 
-        {/* Desktop nav */}
-        <div className="hidden items-center gap-1 md:flex">
-          <NavLink href="/owner/vehicles" label="Vehicles" icon={CarFront} />
-          <NavLink href="/owner/call" label="Call" icon={Phone} />
-        </div>
+      <div className="flex items-center gap-4">
+        <Link href="/owner/vehicles">My Vehicles</Link>
 
-        {/* Right: profile / auth */}
-        <div className="hidden items-center gap-2 md:flex">
-          {user ? (
-            <div className="relative">
-              <button
-                onClick={() => setMenu((v) => !v)}
-                className="inline-flex items-center gap-2 rounded-xl bg-white/5 px-3 py-2 text-sm text-white/90 hover:bg-white/10"
-              >
-                <div className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-white/10">
-                  <User2 className="h-4 w-4" />
+        {!user ? (
+          <>
+            <Link href="/auth/sign-in" className="bg-white text-black px-3 py-1 rounded">Sign In</Link>
+            <Link href="/auth/sign-up" className="bg-orange-500 px-3 py-1 rounded">Sign Up</Link>
+          </>
+        ) : (
+          <div ref={menuRef} className="relative">
+            {/* Avatar button */}
+            <button
+              onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+              className="w-9 h-9 rounded-full bg-white/10 border border-white/20 grid place-items-center"
+              aria-label="Open profile menu"
+            >
+              <span className="font-semibold">{initials}</span>
+            </button>
+
+            {/* Dropdown */}
+            {open && (
+              <div className="absolute right-0 mt-2 w-56 rounded-xl border border-white/20 bg-zinc-900 text-sm shadow-lg p-3">
+                <div className="flex items-center gap-3 pb-3 border-b border-white/10">
+                  <div className="w-10 h-10 rounded-full bg-white/10 grid place-items-center">
+                    <span className="font-semibold">{initials}</span>
+                  </div>
+                  <div className="min-w-0">
+                    <div className="font-medium truncate">{profile?.full_name ?? "Profile"}</div>
+                    <div className="text-zinc-400 truncate">{user.email}</div>
+                  </div>
                 </div>
-                <span className="max-w-[140px] truncate">{user.email ?? "Profile"}</span>
-                <ChevronDown className={`h-4 w-4 transition ${menu ? "rotate-180" : ""}`} />
-              </button>
-              {menu && (
-                <div
-                  className="absolute right-0 mt-2 w-56 overflow-hidden rounded-xl border border-white/10 bg-zinc-900/90 p-1 shadow-2xl backdrop-blur"
-                  onMouseLeave={() => setMenu(false)}
-                >
-                  <Link
-                    href="/owner/profile"
-                    className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-white/5"
-                  >
-                    <User2 className="h-4 w-4" /> Profile
-                  </Link>
-                  <Link
-                    href="/owner/vehicles"
-                    className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-white/5"
-                  >
-                    <CarFront className="h-4 w-4" /> My Vehicles
-                  </Link>
-                  <Link
-                    href="/owner/call"
-                    className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-white/5"
-                  >
-                    <Phone className="h-4 w-4" /> Call Dashboard
-                  </Link>
-                  <button
-                    onClick={signOut}
-                    className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-red-400 hover:bg-red-500/10"
-                  >
-                    <LogOut className="h-4 w-4" /> Sign out
-                  </button>
-                </div>
-              )}
-            </div>
-          ) : (
-            <>
-              <Link
-                href="/auth/sign-in"
-                className="inline-flex items-center gap-2 rounded-xl bg-white/5 px-3 py-2 text-sm hover:bg-white/10"
-              >
-                <LogIn className="h-4 w-4" /> Sign in
-              </Link>
-              <Link
-                href="/auth/sign-up"
-                className="inline-flex items-center gap-2 rounded-xl bg-white/10 px-3 py-2 text-sm text-black"
-                style={{ background: "linear-gradient(135deg,#fff,#ddd)" }}
-              >
-                <UserPlus className="h-4 w-4" /> Sign up
-              </Link>
-            </>
-          )}
-        </div>
 
-        {/* Mobile menu button */}
-        <button
-          className="inline-flex items-center justify-center rounded-xl p-2 hover:bg-white/10 md:hidden"
-          onClick={() => setOpen((v) => !v)}
-        >
-          <Menu className="h-5 w-5" />
-        </button>
-      </div>
-
-      {/* Mobile sheet */}
-      {open && (
-        <div className="md:hidden">
-          <div className="mx-3 mb-3 space-y-2 rounded-2xl border border-white/10 bg-zinc-900/70 p-3 backdrop-blur">
-            <NavLink href="/owner/vehicles" label="Vehicles" icon={CarFront} />
-            <NavLink href="/owner/call" label="Call" icon={Phone} />
-            <div className="h-px bg-white/10" />
-            {user ? (
-              <>
-                <div className="flex items-center gap-2 rounded-xl bg-white/5 px-3 py-2 text-sm">
-                  <User2 className="h-4 w-4" />
-                  <div className="truncate">{user.email ?? "Profile"}</div>
+                <div className="py-2">
+                  <Link href="/owner/vehicles" className="block px-2 py-2 rounded hover:bg-white/10">
+                    My Vehicles
+                  </Link>
+                  <Link href="/owner/profile" className="block px-2 py-2 rounded hover:bg-white/10">
+                    Profile
+                  </Link>
                 </div>
+
                 <button
                   onClick={signOut}
-                  className="inline-flex w-full items-center gap-2 rounded-xl bg-red-600/90 px-3 py-2 text-sm text-white"
+                  className="w-full mt-1 bg-red-600 hover:bg-red-500 text-white px-3 py-2 rounded-lg"
                 >
-                  <LogOut className="h-4 w-4" /> Sign out
+                  Sign Out
                 </button>
-              </>
-            ) : (
-              <div className="flex gap-2">
-                <Link
-                  href="/auth/sign-in"
-                  className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-white/5 px-3 py-2 text-sm hover:bg-white/10"
-                >
-                  <LogIn className="h-4 w-4" /> Sign in
-                </Link>
-                <Link
-                  href="/auth/sign-up"
-                  className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-white/10 px-3 py-2 text-sm text-black"
-                  style={{ background: "linear-gradient(135deg,#fff,#ddd)" }}
-                >
-                  <UserPlus className="h-4 w-4" /> Sign up
-                </Link>
               </div>
             )}
           </div>
-        </div>
-      )}
-    </div>
+        )}
+      </div>
+    </nav>
   );
 }

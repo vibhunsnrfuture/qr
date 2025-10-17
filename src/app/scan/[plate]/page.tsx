@@ -1,98 +1,74 @@
 "use client";
-export const dynamic = "force-dynamic";
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { useParams } from "next/navigation";
-import { supabase } from "@/lib/supabaseClient";
 import { startCall } from "@/lib/agora";
 
-type CallRow = {
-  id: string;
-  channel: string;
-  status: "ringing" | "accepted" | "declined" | "timeout" | "ended";
-};
+type StopFn = () => Promise<void>;
 
 export default function ScanCallPage() {
-  const { plate } = useParams<{ plate: string }>();
-  const [ui, setUi] = useState("starting...");
-  const sessionIdRef = useRef<string | null>(null);
-  const stopRef = useRef<null | (() => Promise<void>)>(null);
-  const channelRef = useRef<string | null>(null);
-  const subRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  // Read the dynamic route param safely on the client
+  const params = useParams<{ plate: string }>();
+  const plate = String(params?.plate ?? "");
 
-  useEffect(() => {
-    async function run() {
-      setUi("Ringing owner...");
-      // 1) create session via RPC
-      const { data, error } = await supabase.rpc("create_call_session", {
-        p_plate: String(plate),
-        p_caller: { ua: navigator.userAgent },
-      });
-      if (error) {
-        setUi(`Failed: ${error.message}`);
+  const [stopFn, setStopFn] = useState<StopFn | null>(null);
+  const [status, setStatus] = useState<"idle" | "calling" | "oncall">("idle");
+  const [error, setError] = useState<string | null>(null);
+
+  async function onStart() {
+    try {
+      setError(null);
+      if (!plate) {
+        setError("Missing plate from URL.");
         return;
       }
-      const row = data as CallRow & { channel: string };
-      sessionIdRef.current = row.id;
-      channelRef.current = row.channel;
-
-      // 2) subscribe to this row for status changes
-      const ch = supabase
-        .channel(`call_${row.id}`)
-        .on(
-          "postgres_changes",
-          {
-            event: "*",
-            schema: "public",
-            table: "call_sessions",
-            filter: `id=eq.${row.id}`,
-          },
-          async (payload) => {
-            const next = payload.new as CallRow;
-            if (!next) return;
-
-            if (next.status === "accepted") {
-              setUi("Connecting...");
-              const stop = await startCall(channelRef.current!);
-              stopRef.current = stop;
-              setUi("Connected — talking");
-            } else if (next.status === "declined") {
-              setUi("Declined by owner");
-            } else if (next.status === "timeout") {
-              setUi("No answer (timeout)");
-            } else if (next.status === "ended") {
-              setUi("Call ended");
-              await stopRef.current?.();
-            }
-          }
-        )
-        .subscribe();
-      subRef.current = ch;
-
-      // Optional: timeout after 25s if no accept
-      setTimeout(async () => {
-        if (!sessionIdRef.current) return;
-        // just mark UI; server-side timeout rule optional later
-        if (!stopRef.current) setUi("No answer (timeout)");
-      }, 25000);
+      setStatus("calling");
+      const stop = await startCall(plate); // joins & publishes mic
+      setStopFn(() => stop);
+      setStatus("oncall");
+    } catch (e) {
+      setStatus("idle");
+      setError(e instanceof Error ? e.message : "Call failed");
     }
+  }
 
-    run();
-    return () => {
-      stopRef.current?.();
-      if (subRef.current) supabase.removeChannel(subRef.current);
-    };
-  }, [plate]);
+  async function onHangup() {
+    try {
+      await stopFn?.();
+    } finally {
+      setStopFn(null);
+      setStatus("idle");
+    }
+  }
 
   return (
-    <div className="space-y-3 p-6">
-      <h1 className="text-xl font-semibold">Calling owner — {String(plate).toUpperCase()}</h1>
-      <div className="text-sm">{ui}</div>
-      {stopRef.current && (
-        <button className="btn" onClick={() => stopRef.current?.()}>
+    <div className="p-4 max-w-md mx-auto space-y-3">
+      <h1 className="text-xl font-semibold">Call Owner — {plate || "…"}</h1>
+
+      {error && (
+        <div className="rounded bg-red-500/10 border border-red-500/30 p-2 text-sm text-red-300">
+          {error}
+        </div>
+      )}
+
+      {status !== "oncall" ? (
+        <button
+          className="btn bg-emerald-600 text-white px-4 py-2 rounded"
+          onClick={onStart}
+          disabled={!plate || status === "calling"}
+        >
+          {status === "calling" ? "Connecting…" : "Start Call"}
+        </button>
+      ) : (
+        <button
+          className="btn bg-red-600 text-white px-4 py-2 rounded"
+          onClick={onHangup}
+        >
           Hang Up
         </button>
       )}
+
+      <div className="text-sm opacity-70">status: {status}</div>
     </div>
   );
 }
