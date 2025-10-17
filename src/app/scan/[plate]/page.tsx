@@ -8,7 +8,10 @@ type StopFn = () => Promise<void>;
 
 export default function ScanCallPage() {
   const params = useParams<{ plate: string }>();
-  const plate = String(params.plate || "").toUpperCase().replace(/\s+/g, "");
+
+  // 1) Decode URI component and normalize (uppercase + remove spaces/dashes)
+  const rawParam = String(params.plate ?? "");
+  const plate = decodeURIComponent(rawParam).toUpperCase().replace(/[\s-]+/g, "");
 
   const [status, setStatus] = useState<"idle" | "calling" | "oncall">("idle");
   const [stopFn, setStopFn] = useState<StopFn | null>(null);
@@ -17,9 +20,12 @@ export default function ScanCallPage() {
   async function onStart() {
     try {
       setError(null);
-      if (!plate) return setError("Missing plate");
+      if (!plate) {
+        setError("Missing plate");
+        return;
+      }
 
-      // 1) create ringing row (dashboard will ring)
+      // 2) create ringing row (server finds owner & sets channel)
       const resp = await fetch("/api/call/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -28,15 +34,21 @@ export default function ScanCallPage() {
           caller_info: { ua: navigator.userAgent, ts: Date.now() },
         }),
       });
+
       if (!resp.ok) {
-        const t = await resp.json().catch(() => ({}));
-        throw new Error(t?.error || "Failed to start call session");
+        // read error safely once
+        let msg = "Failed to start call session";
+        try {
+          const t = await resp.json();
+          if (t?.error) msg = t.error;
+        } catch {}
+        throw new Error(msg);
       }
 
-      // 2) always use channel returned by server
+      // 3) always use server-returned channel
       const { call } = await resp.json();
-
       setStatus("calling");
+
       const stop = await startCall(call.channel);
       setStopFn(() => stop);
       setStatus("oncall");
@@ -66,8 +78,12 @@ export default function ScanCallPage() {
       )}
 
       {status !== "oncall" ? (
-        <button className="btn bg-indigo-600 text-white px-4 py-2 rounded" onClick={onStart}>
-          Start Call
+        <button
+          className="btn bg-indigo-600 text-white px-4 py-2 rounded"
+          onClick={onStart}
+          disabled={!plate || status === "calling"}
+        >
+          {status === "calling" ? "Connecting…" : "Start Call"}
         </button>
       ) : (
         <button className="btn bg-red-600 text-white px-4 py-2 rounded" onClick={onHangup}>
