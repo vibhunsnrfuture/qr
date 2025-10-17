@@ -57,6 +57,17 @@ export default function OwnerCallPage() {
   const ringRef = useRef<HTMLAudioElement | null>(null);
   const stopRef = useRef<StopFn | null>(null);
 
+  
+const [now, setNow] = useState<string>("");
+
+// start ticking on client only
+useEffect(() => {
+  setNow(new Date().toLocaleTimeString());
+  const id = setInterval(() => setNow(new Date().toLocaleTimeString()), 1000);
+  return () => clearInterval(id);
+}, []);
+
+
   const stopRingtone = useCallback(() => {
     const a = ringRef.current;
     if (!a) return;
@@ -265,8 +276,8 @@ export default function OwnerCallPage() {
         </div>
         <div className="rounded-lg border border-white/10 bg-white/5 p-2">
           <div className="opacity-60">Time</div>
-          <div className="truncate">{new Date().toLocaleTimeString()}</div>
-        </div>
+           <div className="truncate" suppressHydrationWarning>{now || "—"}</div>
+</div>
         <div className="rounded-lg border border-white/10 bg-white/5 p-2">
           <div className="opacity-60">Current Call</div>
           <div className="truncate">{currentIdRef.current ?? "—"}</div>
