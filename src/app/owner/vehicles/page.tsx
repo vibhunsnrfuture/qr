@@ -94,53 +94,129 @@ export default function Vehicles() {
   }
 
   return (
-    <div className="space-y-4">
-      <h2 className="text-xl font-semibold">My Vehicles</h2>
+    <section className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8 py-8">
+      {/* Title */}
+      <div className="text-center mb-6">
+        <h2 className="text-2xl sm:text-3xl font-semibold tracking-tight">My Vehicles</h2>
+        <p className="text-sm text-white/60 mt-1">
+          Add your vehicle, generate a QR, and manage activation.
+        </p>
+      </div>
 
-      <form onSubmit={add} className="flex gap-2">
-        <input
-          className="input"
-          placeholder="Plate (e.g., UP14AB1234)"
-          value={plate}
-          onChange={(e) => setPlate(e.target.value)}
-        />
-        <button className="btn">Add</button>
+      {/* Add form */}
+      <form
+        onSubmit={add}
+        className="rounded-2xl border border-white/10 bg-zinc-900/50 backdrop-blur p-4 sm:p-5 shadow-sm mb-6"
+      >
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+          <input
+            className="input flex-1 rounded-xl border border-white/10 bg-white/5 px-4 py-2 outline-none focus:ring-2 focus:ring-cyan-500/40"
+            placeholder="Plate (e.g., UP14AB1234)"
+            value={plate}
+            onChange={(e) => setPlate(e.target.value)}
+          />
+          <button
+            className="btn rounded-xl bg-gradient-to-r from-cyan-400 to-indigo-500 px-4 py-2 font-medium shadow-lg shadow-cyan-500/20 hover:opacity-95"
+          >
+            Add
+          </button>
+        </div>
       </form>
 
+      {/* QR Preview */}
       {qr && (
-        <div className="p-4 border rounded w-fit space-y-2">
-          <div className="text-sm text-white/60 text-center">{qrPlate}</div>
-          <Image
-            src={qr}
-            alt="QR"
-            width={256}
-            height={256}
-            unoptimized
-          />
-          <div className="flex gap-2">
-            <button className="btn" onClick={downloadQR}>Download</button>
-            <a className="btn" href={`/scan/${encodeURIComponent(qrPlate)}`} target="_blank" rel="noreferrer">
-              Open Scan Page
-            </a>
+        <div className="flex justify-center mb-6">
+          <div className="p-4 border border-white/10 rounded-2xl bg-zinc-900/50 backdrop-blur w-full max-w-sm space-y-3 shadow-sm">
+            <div className="text-sm text-white/70 text-center font-mono tracking-wide">
+              {qrPlate}
+            </div>
+            <div className="flex justify-center">
+              <Image
+                src={qr}
+                alt="QR"
+                width={256}
+                height={256}
+                unoptimized
+                className="rounded-lg ring-1 ring-white/10"
+              />
+            </div>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <button
+                className="btn rounded-lg bg-white/10 hover:bg-white/15 border border-white/10 px-3 py-2"
+                onClick={downloadQR}
+              >
+                Download
+              </button>
+              <a
+                className="btn rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-400/30 px-3 py-2 text-cyan-300"
+                href={`/scan/${encodeURIComponent(qrPlate)}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open Scan Page
+              </a>
+            </div>
           </div>
         </div>
       )}
 
-      <ul className="divide-y">
-        {list.map((v) => (
-          <li key={v.id} className="py-3 flex flex-wrap items-center gap-3">
-            <span className="font-mono">{v.plate}</span>
-            <span className={`text-xs rounded-full px-2 py-0.5 border ${v.active ? "border-green-500/40 text-green-400" : "border-yellow-500/40 text-yellow-400"}`}>
-              {v.active ? "Active" : "Disabled"}
-            </span>
-            <button className="btn" onClick={() => showQR(v.plate)}>QR</button>
-            <button className="btn" onClick={() => toggleActive(v.id, !v.active)}>
-              {v.active ? "Disable" : "Enable"}
-            </button>
-            <button className="btn" onClick={() => del(v.id)}>Delete</button>
-          </li>
-        ))}
-      </ul>
-    </div>
+      {/* Vehicles list */}
+      <div className="space-y-3">
+        {list.length === 0 ? (
+          <div className="text-center text-white/60 text-sm py-8 border border-dashed border-white/10 rounded-2xl">
+            No vehicles yet. Add your first vehicle above.
+          </div>
+        ) : (
+          <ul className="grid gap-3">
+            {list.map((v) => (
+              <li
+                key={v.id}
+                className="rounded-2xl border border-white/10 bg-zinc-900/50 backdrop-blur p-4 shadow-sm"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  {/* Left block (center-friendly on small screens) */}
+                  <div className="flex items-center gap-3">
+                    <span className="font-mono text-base sm:text-lg tracking-wide">
+                      {v.plate}
+                    </span>
+                    <span
+                      className={`text-xs rounded-full px-2 py-0.5 border ${
+                        v.active
+                          ? "border-green-500/40 text-green-400"
+                          : "border-yellow-500/40 text-yellow-400"
+                      }`}
+                    >
+                      {v.active ? "Active" : "Disabled"}
+                    </span>
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      className="btn rounded-lg bg-white/10 hover:bg-white/15 border border-white/10 px-3 py-1.5"
+                      onClick={() => showQR(v.plate)}
+                    >
+                      QR
+                    </button>
+                    <button
+                      className="btn rounded-lg bg-white/10 hover:bg-white/15 border border-white/10 px-3 py-1.5"
+                      onClick={() => toggleActive(v.id, !v.active)}
+                    >
+                      {v.active ? "Disable" : "Enable"}
+                    </button>
+                    <button
+                      className="btn rounded-lg bg-red-500/15 hover:bg-red-500/25 border border-red-400/30 px-3 py-1.5 text-red-300"
+                      onClick={() => del(v.id)}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
   );
 }

@@ -1,4 +1,7 @@
 // src/app/api/agora-token/route.ts
+export const runtime = 'nodejs';        // env vars 100% available
+export const dynamic = 'force-dynamic'; // koi caching nahi
+
 import { NextRequest, NextResponse } from "next/server";
 import { RtcRole, RtcTokenBuilder } from "agora-access-token";
 
