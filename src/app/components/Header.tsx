@@ -16,9 +16,9 @@ export default function Header() {
 
   const links = [
     { href: "/", label: "Home" },
-    { href: "/about", label: "About-Us" },
-    { href: "/use", label: "Use-cases" },
-    { href: "/contacts", label: "Contact" },
+    { href: "/about", label: "About" },
+    { href: "/use", label: "Use Cases" },
+    { href: "/contact", label: "Contact" },
   ];
 
   useEffect(() => {
@@ -101,7 +101,7 @@ export default function Header() {
             </div>
 
             <span className="font-semibold tracking-wide text-lg">
-              Scan-to-Call
+              Qratech
             </span>
           </Link>
 
@@ -121,7 +121,7 @@ export default function Header() {
               href="/owner/vehicles"
               className="text-sm text-white/80 hover:text-white"
             >
-              My Vehicles
+              Vehicles & QR
             </Link>
 
             {user && (

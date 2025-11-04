@@ -194,7 +194,7 @@ export default function AboutPage() {
           <h3 className="text-2xl font-semibold">Ready to connect the world with a scan?</h3>
           <p className="text-white/70 mt-2">Get a demo tailored to your use case in minutes.</p>
           <a
-            href="/contacts#contact"
+            href="/owner/vehicles"
             className="inline-block mt-4 rounded-full bg-gradient-to-r from-cyan-400 to-indigo-500 px-6 py-2.5 font-medium shadow-lg shadow-cyan-500/20 hover:opacity-95"
           >
             Get a Demo

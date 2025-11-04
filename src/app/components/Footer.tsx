@@ -26,15 +26,18 @@ export default function Footer() {
           />
 
           <div className="flex items-center gap-3 mb-4 relative z-10">
-            <Image
-              src="/images/logo.png" // replace with your logo path
-              alt="Qratech Logo"
-              width={100}
-              height={100}
-              className="rounded-md drop-shadow-[0_0_20px_rgba(255,100,100,0.6)]"
-              priority
-            />
-            <h3 className="text-xl font-semibold tracking-wide">Qratech</h3>
+            {/* ✅ White background box added behind logo */}
+            <div className="bg-white rounded-lg p-2 shadow-lg">
+              <Image
+                src="/images/logo.png"
+                alt="Qratech Logo"
+                width={100}
+                height={100}
+                className="rounded-md object-contain"
+                priority
+              />
+            </div>
+            <h3 className="text-xl font-semibold tracking-wide">Scan • Connect • Instantly</h3>
           </div>
 
           <p className="text-white/80 leading-relaxed relative z-10">
@@ -89,7 +92,7 @@ export default function Footer() {
               </Link>
             </li>
             <li>
-              <Link href="/contacts" className="hover:text-cyan-300 transition">
+              <Link href="/contact" className="hover:text-cyan-300 transition">
                 Help Center
               </Link>
             </li>
@@ -107,31 +110,31 @@ export default function Footer() {
             <FaEnvelope className="text-cyan-400" />
             <span>support@qratech.com</span>
           </div>
-        <a
-          href="tel:+919933309571"
-         className="flex items-center gap-2 hover:text-cyan-300 transition"
-        >
-         <FaPhoneAlt className="text-cyan-400" />
-         <span>+91 9933309571</span>
-        </a>
+          <a
+            href="tel:+919933309571"
+            className="flex items-center gap-2 hover:text-cyan-300 transition"
+          >
+            <FaPhoneAlt className="text-cyan-400" />
+            <span>+91 9933309571</span>
+          </a>
 
           <div className="flex items-center gap-2">
             <a
-            href="https://wa.me/919933309571"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-2 hover:text-green-400 transition"
-          >
-          <FaWhatsapp className="text-green-400" />
-          <span>+91-9933309571</span>
-</a>
+              href="https://wa.me/919933309571"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 hover:text-green-400 transition"
+            >
+              <FaWhatsapp className="text-green-400" />
+              <span>+91-9933309571</span>
+            </a>
           </div>
         </div>
 
         <motion.a
           whileHover={{ scale: 1.05 }}
           whileTap={{ scale: 0.95 }}
-          href="/contacts" // link to contact or QR page
+          href="/owner/vehicles"
           className="bg-gradient-to-r from-cyan-400 to-blue-500 text-black font-semibold px-6 py-3 rounded-full shadow-[0_0_25px_rgba(34,211,238,0.5)] hover:shadow-[0_0_35px_rgba(34,211,238,0.8)] transition"
         >
           Get Your QR
