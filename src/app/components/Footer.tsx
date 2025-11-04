@@ -26,18 +26,19 @@ export default function Footer() {
           />
 
           <div className="flex items-center gap-3 mb-4 relative z-10">
-            {/* ✅ White background box added behind logo */}
-            <div className="bg-white rounded-lg p-2 shadow-lg">
-              <Image
-                src="/images/logo.png"
-                alt="Qratech Logo"
-                width={100}
-                height={100}
-                className="rounded-md object-contain"
-                priority
-              />
-            </div>
-            <h3 className="text-xl font-semibold tracking-wide">Scan • Connect • Instantly</h3>
+            
+            {/* logo */}
+            <Image
+              src="/images/bg-logo.png"
+              alt="Qratech Logo"
+              width={100}
+              height={100}
+              className="rounded-md object-contain"
+              priority
+            />
+            <h3 className="text-xl font-semibold tracking-wide">
+              Scan • Connect • Instantly
+            </h3>
           </div>
 
           <p className="text-white/80 leading-relaxed relative z-10">
@@ -49,7 +50,9 @@ export default function Footer() {
 
         {/* Quick Links */}
         <div>
-          <h4 className="text-xl font-semibold text-cyan-400 mb-4">Quick Links</h4>
+          <h4 className="text-xl font-semibold text-cyan-400 mb-4">
+            Quick Links
+          </h4>
           <ul className="space-y-2 text-white/80">
             <li>
               <Link href="/" className="hover:text-cyan-300 transition">
@@ -79,7 +82,9 @@ export default function Footer() {
 
         {/* Support */}
         <div>
-          <h4 className="text-xl font-semibold text-cyan-400 mb-4">Support</h4>
+          <h4 className="text-xl font-semibold text-cyan-400 mb-4">
+            Support
+          </h4>
           <ul className="space-y-2 text-white/80">
             <li>
               <Link href="/privacy" className="hover:text-cyan-300 transition">

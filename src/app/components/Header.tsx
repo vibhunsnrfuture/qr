@@ -82,27 +82,17 @@ export default function Header() {
   return (
     <header className="relative z-10 bg-[#0a0f1a]">
       <nav className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-        {/* Top Row */}
-        <div className="flex items-center justify-between py-4">
-          {/* Brand + Logo with glow */}
-          <Link href="/" className="flex items-center gap-3 text-white">
-            <div className="relative grid h-14 w-14 place-items-center rounded-2xl bg-white shadow-md ring-1 ring-white/30 overflow-hidden">
-              {/* Red or white glow for contrast */}
-              <div
-                className="pointer-events-none absolute -inset-2 rounded-2xl bg-red-500/25 blur-xl"
-                aria-hidden
-              />
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src="/images/logo.png" // replace with your logo path
-                alt="Qratech logo"
-                className="relative max-h-16 w-auto object-contain"
-              />
-            </div>
-
-            <span className="font-semibold tracking-wide text-lg">
-              Qratech
-            </span>
+        {/* Top Row: lock height so logo can fill it without growing navbar */}
+        <div className="flex items-center justify-between h-16 md:h-20">
+          {/* Brand + Logo (no box, fills navbar height) */}
+          <Link href="/" className="flex items-center gap-3 text-white h-full">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/images/bg-logo.png" // your logo path
+              alt="Qratech logo"
+              className="h-full w-auto object-contain"
+            />
+            <span className="font-semibold tracking-wide text-lg">Qratech</span>
           </Link>
 
           {/* Desktop Navigation */}
@@ -125,14 +115,12 @@ export default function Header() {
             </Link>
 
             {user && (
-              <>
-                <Link
-                  href="/owner/call"
-                  className="text-sm text-white/80 hover:text-white"
-                >
-                  Calls
-                </Link>
-              </>
+              <Link
+                href="/owner/call"
+                className="text-sm text-white/80 hover:text-white"
+              >
+                Calls
+              </Link>
             )}
 
             {!user && (

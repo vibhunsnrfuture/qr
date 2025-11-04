@@ -34,7 +34,7 @@ function useCountUp({
 type HeroProps = { imageSrc?: string };
 
 export default function Hero({
-  imageSrc = "/images/scan-floating.jpg",
+  imageSrc = "/images/HOME-QR.png",
 }: HeroProps) {
   const users = useCountUp({ end: 5000, duration: 1600 });
   const scans = useCountUp({ end: 25000, duration: 1800 });
