@@ -185,7 +185,7 @@ export default function PrivacyPage() {
               <li><b>Marketing Opt-Out:</b> unsubscribe from non-essential communications.</li>
             </ul>
             <p className="mt-2">
-              To exercise rights, contact us at <a className="text-cyan-300 underline" href="mailto:privacy@qratech.com">privacy@qratech.com</a>. 
+              To exercise rights, contact us at <a className="text-cyan-300 underline" href="mailto:support@qratech.in">support@qratech.in</a>. 
               We’ll verify and respond consistent with applicable laws (e.g., GDPR, CCPA/CPRA).
             </p>
           </SectionCard>
@@ -235,14 +235,14 @@ export default function PrivacyPage() {
             <div className="grid gap-2 sm:grid-cols-2">
               <div className="flex items-center gap-2">
                 <FiMail className="text-cyan-300" />
-                <a href="mailto:privacy@qratech.com" className="text-cyan-300 underline">
-                  privacy@qratech.com
+                <a href="mailto:support@qratech.in" className="text-cyan-300 underline">
+                  support@qratech.in
                 </a>
               </div>
               <div className="flex items-center gap-2">
                 <FiPhone className="text-cyan-300" />
-                <a href="tel:+919876543210" className="text-cyan-300 underline">
-                  +91 98765 43210
+                <a href="tel:+91-9933309571" className="text-cyan-300 underline">
+                  +91-9933309571
                 </a>
               </div>
             </div>

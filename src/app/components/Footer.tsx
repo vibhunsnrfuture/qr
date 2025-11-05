@@ -113,7 +113,7 @@ export default function Footer() {
         <div className="flex flex-col sm:flex-row sm:items-center gap-4 sm:gap-6 text-white/80 text-sm sm:text-base">
           <div className="flex items-center gap-2">
             <FaEnvelope className="text-cyan-400" />
-            <span>support@qratech.com</span>
+            <span>support@qratech.in</span>
           </div>
           <a
             href="tel:+919933309571"
