@@ -190,7 +190,7 @@ export default function ContactsPage() {
         <div className="mt-10 grid md:grid-cols-3 gap-4">
           <InfoTile
             title="Email"
-            content={<a className="hover:underline" href="mailto:support@qratech.app">support@qratech.app</a>}
+            content={<a className="hover:underline" href="mailto:support@qratech.app">support@qratech.in</a>}
           />
           <InfoTile title="Helpline" content={<span>+91-9933309571 (09:00–18:00 IST)</span>} />
           <InfoTile title="Address" content={<span>Pune — Qratech HQ</span>} />

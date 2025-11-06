@@ -19,6 +19,8 @@ export default function Header() {
     { href: "/about", label: "About" },
     { href: "/use", label: "Use Cases" },
     { href: "/contact", label: "Contact" },
+    { href: "/message", label: "Founder’s Message" },
+    
   ];
 
   useEffect(() => {

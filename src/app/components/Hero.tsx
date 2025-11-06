@@ -115,10 +115,10 @@ export default function Hero({
           {/* CTAs */}
           <div className="flex flex-col items-start gap-4 pt-2 sm:flex-row">
             <a
-              href="/auth/sign-up"
+              href="/contact"
               className="rounded-full bg-gradient-to-r from-cyan-400 to-indigo-500 px-6 py-3 font-medium shadow-lg shadow-cyan-500/20 hover:opacity-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300"
             >
-              Get Started Free
+              Get Your QR
             </a>
             <a
               href="/use"
